@@ -746,12 +746,87 @@ export const WorkflowCanvas = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>
       return node
     }
 
+    // 转换X6数据为WorkflowDefinition格式
+    const convertToWorkflowDefinition = (graphData: any) => {
+      if (!graphData || !graphData.cells) {
+        return { nodes: [], edges: [] }
+      }
+
+      const nodes = graphData.cells
+        .filter((cell: any) => cell.shape && !cell.shape.includes('edge'))
+        .map((cell: any) => ({
+          id: cell.id,
+          type: cell.shape?.replace('-node', ''),
+          position: { x: cell.x || 0, y: cell.y || 0 },
+          data: cell.data || {},
+          width: cell.width || 180,
+          height: cell.height || 60,
+        }))
+
+      const edges = graphData.cells
+        .filter((cell: any) => cell.shape === 'edge')
+        .map((cell: any) => ({
+          id: cell.id,
+          source: cell.source?.cell,
+          target: cell.target?.cell,
+          source_handle: cell.source?.port,
+          target_handle: cell.target?.port,
+          label: cell.labels?.[0]?.attrs?.label?.text || '',
+        }))
+
+      return { nodes, edges }
+    }
+
+    // 转换WorkflowDefinition为X6格式
+    const convertFromWorkflowDefinition = (definition: any) => {
+      if (!definition || (!definition.nodes && !definition.cells)) {
+        return { cells: [] }
+      }
+
+      // 如果已经是X6格式，直接返回
+      if (definition.cells) {
+        return definition
+      }
+
+      const nodeCells = (definition.nodes || []).map((node: any) => ({
+        id: node.id,
+        shape: getNodeShape(node.type),
+        x: node.position?.x || 0,
+        y: node.position?.y || 0,
+        width: node.width || 180,
+        height: node.height || 60,
+        label: node.data?.label || node.type,
+        data: node.data || {},
+      }))
+
+      const edgeCells = (definition.edges || []).map((edge: any) => ({
+        id: edge.id,
+        shape: 'edge',
+        source: { cell: edge.source, port: edge.source_handle },
+        target: { cell: edge.target, port: edge.target_handle },
+        labels: edge.label ? [{ attrs: { label: { text: edge.label } } }] : [],
+        attrs: {
+          line: {
+            stroke: '#a0a0a0',
+            strokeWidth: 2,
+            targetMarker: { name: 'classic', size: 8 },
+          },
+        },
+      }))
+
+      return { cells: [...nodeCells, ...edgeCells] }
+    }
+
     // 暴露方法给父组件
     useImperativeHandle(ref, () => ({
       addNode,
-      getGraphData: () => graphRef.current?.toJSON(),
+      getGraphData: () => {
+        const rawData = graphRef.current?.toJSON()
+        return convertToWorkflowDefinition(rawData)
+      },
       loadGraphData: (data: any) => {
-        graphRef.current?.fromJSON(data)
+        const x6Data = convertFromWorkflowDefinition(data)
+        graphRef.current?.fromJSON(x6Data)
       },
       getGraph: () => graphRef.current,
     }))

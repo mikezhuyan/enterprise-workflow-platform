@@ -170,24 +170,38 @@ export const WorkflowEditorPage = () => {
 
   const handleSave = async () => {
     try {
-      const values = await form.validateFields()
+      // 获取表单值（不强制验证）
+      const values = form.getFieldsValue()
       const graphData = canvasRef.current?.getGraphData()
       
+      // 如果没有名称，使用默认值
+      const name = values.name || workflowName || '未命名工作流'
+      
       const workflowData = {
-        ...values,
-        definition: graphData,
+        name,
+        description: values.description || '',
+        definition: graphData || { nodes: [], edges: [] },
+        variables: [],
+        triggers: [],
+        tags: [],
       }
 
-      if (isEditing) {
+      if (isEditing && id) {
         await put(`/workflows/${id}`, workflowData)
         message.success('工作流更新成功')
       } else {
-        await post('/workflows', workflowData)
+        const result: any = await post('/workflows', workflowData)
         message.success('工作流创建成功')
-        navigate('/workflows')
+        // 跳转到编辑页面
+        if (result && result.id) {
+          navigate(`/workflows/${result.id}`)
+        } else {
+          navigate('/workflows')
+        }
       }
-    } catch (error) {
-      message.error('保存失败')
+    } catch (error: any) {
+      console.error('保存失败:', error)
+      message.error(error.response?.data?.detail || '保存失败')
     }
   }
 
@@ -196,15 +210,19 @@ export const WorkflowEditorPage = () => {
   }
 
   const handleExecute = async () => {
+    // 如果没有id，先保存工作流
     if (!id) {
-      message.warning('请先保存工作流')
+      message.info('正在保存工作流...')
+      await handleSave()
       return
     }
+    
     try {
-      await post(`/workflows/${id}/execute`, {})
+      await post(`/workflows/${id}/execute`, { input_data: {} })
       message.success('开始执行工作流')
-    } catch (error) {
-      message.error('执行失败')
+    } catch (error: any) {
+      console.error('执行失败:', error)
+      message.error(error.response?.data?.detail || '执行失败')
     }
   }
 
