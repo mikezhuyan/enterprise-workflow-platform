@@ -30,6 +30,7 @@ import {
   FunctionOutlined,
   MailOutlined,
   FileTextOutlined,
+  GlobalOutlined,
 } from '@ant-design/icons'
 import WorkflowCanvas, { WorkflowCanvasRef } from './components/WorkflowCanvas'
 import NodeConfigPanel from './components/NodeConfigPanel'
@@ -56,6 +57,7 @@ const iconMap: Record<string, React.ReactNode> = {
   MailOutlined: <MailOutlined />,
   NodeIndexOutlined: <NodeIndexOutlined />,
   FileTextOutlined: <FileTextOutlined />,
+  GlobalOutlined: <GlobalOutlined />,
 }
 
 // 分类名称映射

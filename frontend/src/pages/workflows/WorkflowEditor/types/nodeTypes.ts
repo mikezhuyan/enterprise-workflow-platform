@@ -122,17 +122,38 @@ export const nodeTypeDefinitions: Record<string, NodeTypeDefinition> = {
     requiresComponent: false,
   },
 
-  // API组件
-  http: {
-    type: 'http',
-    name: 'HTTP请求',
+  // API组件 - 支持多种微服务协议
+  api: {
+    type: 'api',
+    name: 'API调用',
     category: 'api',
     icon: 'ApiOutlined',
     color: '#1890ff',
     shape: 'rounded-rect',
-    description: '发起HTTP/HTTPS请求',
+    description: '调用HTTP/gRPC/GraphQL/SOAP/WebSocket等API服务',
     ports: { inputs: 1, outputs: 1 },
     configFields: [
+      {
+        name: 'protocol',
+        label: '协议类型',
+        type: 'select',
+        required: true,
+        defaultValue: 'http',
+        options: [
+          { label: 'HTTP/HTTPS', value: 'http' },
+          { label: 'gRPC', value: 'grpc' },
+          { label: 'GraphQL', value: 'graphql' },
+          { label: 'SOAP', value: 'soap' },
+          { label: 'WebSocket', value: 'websocket' },
+        ],
+      },
+      {
+        name: 'componentId',
+        label: '选择已注册组件',
+        type: 'component-select',
+        description: '从已注册的API组件中选择并复用其配置',
+      },
+      // HTTP协议配置
       {
         name: 'method',
         label: '请求方法',
@@ -166,6 +187,81 @@ export const nodeTypeDefinitions: Record<string, NodeTypeDefinition> = {
         type: 'json',
         description: 'JSON格式的请求体（仅POST/PUT/PATCH）',
       },
+      // gRPC协议配置
+      {
+        name: 'target',
+        label: 'gRPC服务地址',
+        type: 'string',
+        placeholder: 'localhost:50051',
+      },
+      {
+        name: 'service',
+        label: '服务名',
+        type: 'string',
+        placeholder: 'UserService',
+      },
+      {
+        name: 'method',
+        label: '方法名',
+        type: 'string',
+        placeholder: 'GetUser',
+      },
+      {
+        name: 'protoFile',
+        label: 'Proto文件内容',
+        type: 'textarea',
+        description: 'Protocol Buffer定义文件',
+      },
+      // GraphQL协议配置
+      {
+        name: 'endpoint',
+        label: 'GraphQL端点',
+        type: 'string',
+        placeholder: 'https://api.example.com/graphql',
+      },
+      {
+        name: 'query',
+        label: '查询语句',
+        type: 'textarea',
+        description: 'GraphQL查询或变更语句',
+      },
+      {
+        name: 'variables',
+        label: '变量',
+        type: 'json',
+        description: 'GraphQL变量（JSON格式）',
+      },
+      // SOAP协议配置
+      {
+        name: 'soapUrl',
+        label: 'SOAP地址',
+        type: 'string',
+        placeholder: 'http://example.com/soap',
+      },
+      {
+        name: 'soapAction',
+        label: 'SOAP Action',
+        type: 'string',
+      },
+      {
+        name: 'soapBody',
+        label: 'SOAP Body (XML)',
+        type: 'textarea',
+      },
+      // WebSocket协议配置
+      {
+        name: 'wsUrl',
+        label: 'WebSocket地址',
+        type: 'string',
+        placeholder: 'wss://ws.example.com/socket',
+      },
+      {
+        name: 'wsMessage',
+        label: '发送消息',
+        type: 'json',
+        description: '要发送的WebSocket消息',
+      },
+      // 通用配置
       {
         name: 'timeout',
         label: '超时时间(秒)',

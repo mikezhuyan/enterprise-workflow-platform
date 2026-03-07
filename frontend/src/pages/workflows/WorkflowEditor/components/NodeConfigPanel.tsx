@@ -13,10 +13,11 @@ import {
   Tag,
   Row,
   Col,
+  Tabs,
+  message,
 } from 'antd';
 import {
   DeleteOutlined,
-  PlusOutlined,
   ApiOutlined,
   DatabaseOutlined,
   RobotOutlined,
@@ -27,9 +28,11 @@ import {
 } from '@ant-design/icons';
 import { ConfigField, getNodeTypeDefinition } from '../types/nodeTypes';
 import type { Component } from '../../../../types/component';
+import { get } from '../../../../utils/request';
 
 const { TextArea } = Input;
 const { Option } = Select;
+const { TabPane } = Tabs;
 
 interface NodeConfigPanelProps {
   node: any;
@@ -61,6 +64,16 @@ const getIcon = (iconName: string, color: string) => {
   }
 };
 
+// API协议特定的字段
+const protocolFieldMap: Record<string, string[]> = {
+  http: ['method', 'url', 'headers', 'body', 'timeout'],
+  https: ['method', 'url', 'headers', 'body', 'timeout'],
+  grpc: ['target', 'service', 'method', 'protoFile', 'timeout'],
+  graphql: ['endpoint', 'query', 'variables', 'timeout'],
+  soap: ['soapUrl', 'soapAction', 'soapBody', 'timeout'],
+  websocket: ['wsUrl', 'wsMessage', 'timeout'],
+};
+
 export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
   node,
   components,
@@ -69,8 +82,18 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
 }) => {
   const [form] = Form.useForm();
   const [config, setConfig] = useState<any>({});
+  const [selectedProtocol, setSelectedProtocol] = useState<string>('http');
+  const [selectedComponentId, setSelectedComponentId] = useState<string | undefined>();
+  const [apiComponents, setApiComponents] = useState<Component[]>([]);
+  
   const nodeType = node?.data?.type || 'unknown';
   const nodeDef = getNodeTypeDefinition(nodeType);
+
+  // 过滤API类型的组件
+  useEffect(() => {
+    const apiComps = components.filter(c => c.component_type === 'api');
+    setApiComponents(apiComps);
+  }, [components]);
 
   useEffect(() => {
     if (node) {
@@ -80,6 +103,8 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
         ...initialConfig,
       });
       setConfig(initialConfig);
+      setSelectedProtocol(initialConfig.protocol || 'http');
+      setSelectedComponentId(initialConfig.componentId);
     }
   }, [node, form]);
 
@@ -113,24 +138,6 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
     );
   }
 
-  // 过滤可用组件
-  const getAvailableComponents = () => {
-    if (!nodeDef.componentFilter) return [];
-    return components.filter((comp) => {
-      if (nodeDef.componentFilter?.component_type && 
-          comp.component_type !== nodeDef.componentFilter.component_type) {
-        return false;
-      }
-      if (nodeDef.componentFilter?.protocol) {
-        const config = comp.execution_config || {};
-        if (config.protocol !== nodeDef.componentFilter.protocol) {
-          return false;
-        }
-      }
-      return true;
-    });
-  };
-
   const handleSave = () => {
     form.validateFields().then((values) => {
       onSave(node.id, {
@@ -140,8 +147,52 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
     });
   };
 
+  // 处理协议切换
+  const handleProtocolChange = (protocol: string) => {
+    setSelectedProtocol(protocol);
+    form.setFieldsValue({ protocol });
+  };
+
+  // 处理组件选择
+  const handleComponentSelect = (componentId: string) => {
+    setSelectedComponentId(componentId);
+    const selectedComp = apiComponents.find(c => c.id === componentId);
+    
+    if (selectedComp && selectedComp.execution_config) {
+      const execConfig = selectedComp.execution_config;
+      // 自动填充组件配置
+      const newValues = {
+        componentId,
+        protocol: execConfig.protocol || 'http',
+        ...execConfig,
+      };
+      form.setFieldsValue(newValues);
+      setSelectedProtocol(execConfig.protocol || 'http');
+      message.success(`已加载组件「${selectedComp.name}」的配置`);
+    }
+  };
+
+  // 清除组件选择
+  const handleClearComponent = () => {
+    setSelectedComponentId(undefined);
+    form.setFieldsValue({ componentId: undefined });
+  };
+
   // 渲染表单字段
   const renderField = (field: ConfigField) => {
+    // 对于API节点，根据协议过滤字段
+    if (nodeType === 'api') {
+      const protocolFields = protocolFieldMap[selectedProtocol] || [];
+      
+      // 通用字段始终显示
+      const commonFields = ['protocol', 'componentId', 'timeout'];
+      
+      // 如果字段不是通用字段，也不在协议特定字段列表中，则不显示
+      if (!commonFields.includes(field.name) && !protocolFields.includes(field.name)) {
+        return null;
+      }
+    }
+
     const commonProps = {
       placeholder: field.placeholder,
       style: { width: '100%' },
@@ -187,6 +238,18 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
         );
       
       case 'select':
+        // 协议选择特殊处理
+        if (field.name === 'protocol') {
+          return (
+            <Select {...commonProps} onChange={handleProtocolChange}>
+              {field.options?.map((opt) => (
+                <Option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </Option>
+              ))}
+            </Select>
+          );
+        }
         return (
           <Select {...commonProps}>
             {field.options?.map((opt) => (
@@ -198,18 +261,33 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
         );
       
       case 'component-select':
-        const availableComps = getAvailableComponents();
         return (
-          <Select {...commonProps} showSearch>
-            {availableComps.map((comp) => (
-              <Option key={comp.id} value={comp.id}>
-                <Space>
-                  <span>{comp.name}</span>
-                  <Tag>{comp.code}</Tag>
-                </Space>
-              </Option>
-            ))}
-          </Select>
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Select 
+              {...commonProps} 
+              showSearch
+              value={selectedComponentId}
+              onChange={handleComponentSelect}
+              placeholder="选择已注册的API组件（可选）"
+              allowClear
+              onClear={handleClearComponent}
+            >
+              {apiComponents.map((comp) => (
+                <Option key={comp.id} value={comp.id}>
+                  <Space>
+                    <span>{comp.name}</span>
+                    <Tag color="blue" style={{ fontSize: 12 }}>{comp.execution_config?.protocol || 'http'}</Tag>
+                    <span style={{ color: '#999', fontSize: 12 }}>{comp.code}</span>
+                  </Space>
+                </Option>
+              ))}
+            </Select>
+            {selectedComponentId && (
+              <Button type="link" size="small" onClick={handleClearComponent} style={{ padding: 0 }}>
+                清除选择，使用自定义配置
+              </Button>
+            )}
+          </Space>
         );
       
       default:
@@ -278,7 +356,6 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
         <Button
           type="dashed"
           block
-          icon={<PlusOutlined />}
           onClick={() => {
             const newConditions = [
               ...conditions,
@@ -301,293 +378,82 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
     );
   };
 
-  // 渲染LLM特殊配置
-  const renderLLMConfig = () => {
-    return (
-      <>
-        <Form.Item
-          name="model"
-          label="模型"
-          rules={[{ required: true }]}
-        >
-          <Select>
-            <Option value="gpt-4">GPT-4</Option>
-            <Option value="gpt-3.5-turbo">GPT-3.5</Option>
-            <Option value="claude">Claude</Option>
-            <Option value="local">本地模型</Option>
-          </Select>
-        </Form.Item>
-        
-        <Form.Item
-          name="prompt"
-          label="提示词"
-          rules={[{ required: true }]}
-        >
-          <TextArea
-            rows={6}
-            placeholder="请输入提示词，使用 {{variable}} 引用变量"
-          />
-        </Form.Item>
-
-        <Row gutter={16}>
-          <Col span={12}>
-            <Form.Item
-              name="temperature"
-              label="Temperature"
-              tooltip="控制输出的随机性，范围0-1"
-            >
-              <InputNumber min={0} max={1} step={0.1} style={{ width: '100%' }} />
-            </Form.Item>
-          </Col>
-          <Col span={12}>
-            <Form.Item
-              name="maxTokens"
-              label="最大Token数"
-            >
-              <InputNumber min={1} max={8192} style={{ width: '100%' }} />
-            </Form.Item>
-          </Col>
-        </Row>
-
-        <Form.Item
-          name="systemPrompt"
-          label="系统提示词"
-          tooltip="定义AI的角色和行为"
-        >
-          <TextArea
-            rows={3}
-            placeholder="你是一个专业的助手..."
-          />
-        </Form.Item>
-
-        <Form.Item
-          name="outputFormat"
-          label="输出格式"
-        >
-          <Select>
-            <Option value="text">文本</Option>
-            <Option value="json">JSON</Option>
-          </Select>
-        </Form.Item>
-
-        <Divider>或使用已配置的组件</Divider>
-        <Form.Item name="componentId" label="选择AI组件">
-          <Select allowClear placeholder="选择预设组件">
-            {getAvailableComponents().map((comp) => (
-              <Option key={comp.id} value={comp.id}>
-                {comp.name}
-              </Option>
-            ))}
-          </Select>
-        </Form.Item>
-      </>
-    );
-  };
-
-  // 渲染MCP特殊配置
-  const renderMCPConfig = () => {
-    return (
-      <>
-        <Form.Item
-          name="serverUrl"
-          label="MCP服务器地址"
-          rules={[{ required: true }]}
-        >
-          <Input placeholder="http://localhost:3000/sse" />
-        </Form.Item>
-
-        <Form.Item
-          name="toolName"
-          label="工具名称"
-          rules={[{ required: true }]}
-        >
-          <Input placeholder="要调用的MCP工具名" />
-        </Form.Item>
-
-        <Form.Item
-          name="parameters"
-          label="参数"
-        >
-          <TextArea
-            rows={4}
-            style={{ fontFamily: 'monospace' }}
-            placeholder='{"key": "value"}'
-          />
-        </Form.Item>
-
-        <Form.Item
-          name="timeout"
-          label="超时时间(秒)"
-        >
-          <InputNumber min={1} max={300} style={{ width: '100%' }} />
-        </Form.Item>
-
-        <Divider>或使用已配置的组件</Divider>
-        <Form.Item name="componentId" label="选择MCP组件">
-          <Select allowClear placeholder="选择预设组件">
-            {getAvailableComponents().map((comp) => (
-              <Option key={comp.id} value={comp.id}>
-                {comp.name}
-              </Option>
-            ))}
-          </Select>
-        </Form.Item>
-      </>
-    );
-  };
-
-  // 渲染数据库特殊配置
-  const renderDatabaseConfig = () => {
-    return (
-      <>
-        <Form.Item
-          name="dbType"
-          label="数据库类型"
-          rules={[{ required: true }]}
-        >
-          <Select>
-            <Option value="postgresql">PostgreSQL</Option>
-            <Option value="mysql">MySQL</Option>
-            <Option value="mongodb">MongoDB</Option>
-            <Option value="redis">Redis</Option>
-          </Select>
-        </Form.Item>
-
-        <Form.Item
-          name="connection"
-          label="连接字符串"
-          rules={[{ required: true }]}
-        >
-          <Input placeholder="postgresql://user:pass@host:port/db" />
-        </Form.Item>
-
-        <Form.Item
-          name="operation"
-          label="操作类型"
-          rules={[{ required: true }]}
-        >
-          <Select>
-            <Option value="query">查询</Option>
-            <Option value="insert">插入</Option>
-            <Option value="update">更新</Option>
-            <Option value="delete">删除</Option>
-          </Select>
-        </Form.Item>
-
-        <Form.Item
-          name="sql"
-          label="SQL/查询语句"
-          rules={[{ required: true }]}
-        >
-          <TextArea
-            rows={6}
-            style={{ fontFamily: 'monospace' }}
-            placeholder="SELECT * FROM users WHERE id = {{userId}}"
-          />
-        </Form.Item>
-
-        <Divider>或使用已配置的组件</Divider>
-        <Form.Item name="componentId" label="选择数据库组件">
-          <Select allowClear placeholder="选择预设组件">
-            {getAvailableComponents().map((comp) => (
-              <Option key={comp.id} value={comp.id}>
-                {comp.name}
-              </Option>
-            ))}
-          </Select>
-        </Form.Item>
-      </>
-    );
-  };
-
-  // 渲染HTTP特殊配置
-  const renderHTTPConfig = () => {
-    return (
-      <>
-        <Form.Item
-          name="method"
-          label="请求方法"
-          rules={[{ required: true }]}
-        >
-          <Select>
-            <Option value="GET">GET</Option>
-            <Option value="POST">POST</Option>
-            <Option value="PUT">PUT</Option>
-            <Option value="DELETE">DELETE</Option>
-            <Option value="PATCH">PATCH</Option>
-          </Select>
-        </Form.Item>
-
-        <Form.Item
-          name="url"
-          label="请求URL"
-          rules={[{ required: true }]}
-        >
-          <Input placeholder="https://api.example.com/data" />
-        </Form.Item>
-
-        <Form.Item
-          name="headers"
-          label="请求头"
-        >
-          <TextArea
-            rows={3}
-            style={{ fontFamily: 'monospace' }}
-            placeholder='{"Authorization": "Bearer {{token}}"}'
-          />
-        </Form.Item>
-
-        <Form.Item
-          name="body"
-          label="请求体"
-        >
-          <TextArea
-            rows={4}
-            style={{ fontFamily: 'monospace' }}
-            placeholder='{"key": "value"}'
-          />
-        </Form.Item>
-
-        <Form.Item
-          name="timeout"
-          label="超时时间(秒)"
-        >
-          <InputNumber min={1} max={300} style={{ width: '100%' }} />
-        </Form.Item>
-      </>
-    );
-  };
-
-  // 渲染通用字段
-  const renderGenericFields = () => {
-    return nodeDef.configFields.map((field) => (
-      <Form.Item
-        key={field.name}
-        name={field.name}
-        label={field.label}
-        rules={field.required ? [{ required: true, message: `请输入${field.label}` }] : []}
-        help={field.description}
-      >
-        {renderField(field)}
-      </Form.Item>
-    ));
-  };
-
   // 根据节点类型渲染不同的配置
   const renderConfigByType = () => {
     switch (nodeType) {
       case 'condition':
         return renderConditionConfig();
-      case 'llm':
-        return renderLLMConfig();
-      case 'mcp':
-        return renderMCPConfig();
-      case 'database':
-        return renderDatabaseConfig();
-      case 'http':
-        return renderHTTPConfig();
+      case 'api':
+        return (
+          <>
+            <Divider orientation="left">基础配置</Divider>
+            {nodeDef.configFields
+              .filter(field => field.name === 'protocol' || field.name === 'componentId')
+              .map((field) => (
+                <Form.Item
+                  key={field.name}
+                  name={field.name}
+                  label={field.label}
+                  rules={field.required ? [{ required: true, message: `请输入${field.label}` }] : []}
+                  help={field.description}
+                >
+                  {renderField(field)}
+                </Form.Item>
+              ))}
+            
+            <Divider orientation="left">{selectedProtocol.toUpperCase()} 协议配置</Divider>
+            
+            {selectedComponentId && (
+              <Alert
+                message="已加载组件配置"
+                description="以下配置来自所选组件，您可以直接使用或修改"
+                type="info"
+                showIcon
+                style={{ marginBottom: 16 }}
+                action={
+                  <Button size="small" type="link" onClick={handleClearComponent}>
+                    清除
+                  </Button>
+                }
+              />
+            )}
+            
+            {nodeDef.configFields
+              .filter(field => {
+                const protocolFields = protocolFieldMap[selectedProtocol] || [];
+                const commonFields = ['protocol', 'componentId', 'timeout'];
+                return protocolFields.includes(field.name) || 
+                       (field.name === 'timeout' && !commonFields.includes(field.name));
+              })
+              .map((field) => (
+                <Form.Item
+                  key={field.name}
+                  name={field.name}
+                  label={field.label}
+                  rules={field.required ? [{ required: true, message: `请输入${field.label}` }] : []}
+                  help={field.description}
+                >
+                  {renderField(field)}
+                </Form.Item>
+              ))}
+          </>
+        );
       default:
-        return renderGenericFields();
+        return nodeDef.configFields.map((field) => {
+          const element = renderField(field);
+          if (!element) return null;
+          return (
+            <Form.Item
+              key={field.name}
+              name={field.name}
+              label={field.label}
+              rules={field.required ? [{ required: true, message: `请输入${field.label}` }] : []}
+              help={field.description}
+            >
+              {element}
+            </Form.Item>
+          );
+        });
     }
   };
 

@@ -4,65 +4,92 @@ import {
   Row,
   Col,
   Statistic,
-  Timeline,
   List,
   Tag,
   Button,
+  message,
 } from 'antd'
 import {
   ApiOutlined,
   AppstoreOutlined,
   CheckCircleOutlined,
-  ClockCircleOutlined,
   PlayCircleOutlined,
   ArrowRightOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
+import { get } from '../../services/request'
 import './index.less'
+
+interface DashboardStats {
+  workflow_count: number
+  component_count: number
+  today_executions: number
+  success_rate: number
+}
+
+interface RecentExecution {
+  id: string
+  name: string
+  status: string
+  time: string
+}
 
 export const DashboardPage = () => {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
+  const [stats, setStats] = useState<DashboardStats>({
+    workflow_count: 0,
+    component_count: 0,
+    today_executions: 0,
+    success_rate: 0,
+  })
+  const [recentExecutions, setRecentExecutions] = useState<RecentExecution[]>([])
 
   useEffect(() => {
-    // 模拟数据加载
-    const timer = setTimeout(() => setLoading(false), 500)
-    return () => clearTimeout(timer)
+    fetchStats()
   }, [])
 
-  const stats = [
+  const fetchStats = async () => {
+    try {
+      setLoading(true)
+      const res: any = await get('/dashboard/stats')
+      if (res.success) {
+        setStats(res.data)
+        setRecentExecutions(res.data.recent_executions || [])
+      }
+    } catch (error) {
+      message.error('获取统计数据失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const statsConfig = [
     {
       title: '工作流总数',
-      value: 42,
+      value: stats.workflow_count,
       icon: <ApiOutlined />,
       color: '#1890ff',
     },
     {
       title: '组件总数',
-      value: 128,
+      value: stats.component_count,
       icon: <AppstoreOutlined />,
       color: '#52c41a',
     },
     {
       title: '今日执行',
-      value: 256,
+      value: stats.today_executions,
       icon: <PlayCircleOutlined />,
       color: '#722ed1',
     },
     {
       title: '成功率',
-      value: 98.5,
+      value: stats.success_rate,
       suffix: '%',
       icon: <CheckCircleOutlined />,
       color: '#fa8c16',
     },
-  ]
-
-  const recentExecutions = [
-    { id: 1, name: '订单处理流程', status: 'success', time: '2分钟前' },
-    { id: 2, name: '数据同步任务', status: 'running', time: '5分钟前' },
-    { id: 3, name: '报表生成', status: 'success', time: '10分钟前' },
-    { id: 4, name: '邮件发送', status: 'failed', time: '15分钟前' },
   ]
 
   const quickActions = [
@@ -83,7 +110,7 @@ export const DashboardPage = () => {
   return (
     <div className="dashboard-page">
       <Row gutter={[24, 24]}>
-        {stats.map((stat, index) => (
+        {statsConfig.map((stat, index) => (
           <Col xs={24} sm={12} lg={6} key={index}>
             <Card loading={loading}>
               <Statistic
@@ -103,10 +130,7 @@ export const DashboardPage = () => {
 
       <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
         <Col xs={24} lg={16}>
-          <Card
-            title="快捷操作"
-            loading={loading}
-          >
+          <Card title="快捷操作" loading={loading}>
             <Row gutter={[16, 16]}>
               {quickActions.map((action, index) => (
                 <Col xs={24} sm={12} key={index}>
@@ -134,7 +158,7 @@ export const DashboardPage = () => {
           <Card
             title="最近执行"
             loading={loading}
-            extra={<Button type="link">查看全部</Button>}
+            extra={<Button type="link" onClick={() => navigate('/workflows')}>查看全部</Button>}
           >
             <List
               dataSource={recentExecutions}
@@ -168,3 +192,5 @@ export const DashboardPage = () => {
     </div>
   )
 }
+
+export default DashboardPage

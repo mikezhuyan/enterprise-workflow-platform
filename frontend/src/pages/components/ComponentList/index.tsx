@@ -14,6 +14,12 @@ import {
   Tabs,
   Badge,
   Tooltip,
+  Modal,
+  Form,
+  Row,
+  Col,
+  Divider,
+  Spin,
 } from 'antd'
 import {
   PlusOutlined,
@@ -37,12 +43,14 @@ import {
   ThunderboltOutlined,
   CheckCircleOutlined,
   ExclamationCircleOutlined,
+  CloseOutlined,
 } from '@ant-design/icons'
 import { get, del, post } from '../../../services/request'
 
 const { Search } = Input
 const { Option } = Select
 const { TabPane } = Tabs
+const { TextArea } = Input
 
 const componentTypeMap: Record<string, { icon: any, color: string, label: string }> = {
   api: { icon: <ApiOutlined />, color: 'blue', label: 'API服务' },
@@ -77,6 +85,146 @@ const protocolMap: Record<string, string> = {
   anthropic: 'Anthropic',
 }
 
+// 测试弹窗组件
+interface TestModalProps {
+  visible: boolean
+  component: any
+  onClose: () => void
+}
+
+const TestModal: React.FC<TestModalProps> = ({ visible, component, onClose }) => {
+  const [form] = Form.useForm()
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<any>(null)
+
+  useEffect(() => {
+    if (visible && component) {
+      // 根据组件输入schema生成默认测试数据
+      const defaultInput = generateDefaultInput(component.input_schema)
+      form.setFieldsValue({ input_data: JSON.stringify(defaultInput, null, 2) })
+      setResult(null)
+    }
+  }, [visible, component, form])
+
+  const generateDefaultInput = (schema: any) => {
+    if (!schema || !schema.properties) return {}
+    const input: Record<string, any> = {}
+    Object.entries(schema.properties).forEach(([key, prop]: [string, any]) => {
+      switch (prop.type) {
+        case 'string':
+          input[key] = prop.example || ''
+          break
+        case 'number':
+          input[key] = prop.example || 0
+          break
+        case 'boolean':
+          input[key] = prop.example || false
+          break
+        case 'object':
+          input[key] = prop.example || {}
+          break
+        case 'array':
+          input[key] = prop.example || []
+          break
+        default:
+          input[key] = null
+      }
+    })
+    return input
+  }
+
+  const handleTest = async () => {
+    try {
+      setLoading(true)
+      const values = await form.validateFields()
+      const inputData = JSON.parse(values.input_data)
+      const res = await post(`/components/${component.id}/test`, { input_data: inputData })
+      setResult(res)
+    } catch (error: any) {
+      message.error(error.response?.data?.detail || '测试失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (!component) return null
+
+  return (
+    <Modal
+      title={
+        <Space>
+          <PlayCircleOutlined style={{ color: '#1890ff' }} />
+          <span>测试组件: {component.name}</span>
+        </Space>
+      }
+      open={visible}
+      onCancel={onClose}
+      width={800}
+      footer={[
+        <Button key="close" onClick={onClose}>
+          关闭
+        </Button>,
+        <Button key="test" type="primary" loading={loading} onClick={handleTest} icon={<PlayCircleOutlined />}>
+          执行测试
+        </Button>,
+      ]}
+    >
+      <Spin spinning={loading}>
+        <Form form={form} layout="vertical">
+          <Form.Item
+            name="input_data"
+            label="输入数据 (JSON)"
+            rules={[
+              { required: true, message: '请输入输入数据' },
+              {
+                validator: (_, value) => {
+                  try {
+                    JSON.parse(value)
+                    return Promise.resolve()
+                  } catch {
+                    return Promise.reject('请输入有效的JSON格式')
+                  }
+                },
+              },
+            ]}
+          >
+            <TextArea rows={8} style={{ fontFamily: 'monospace' }} />
+          </Form.Item>
+        </Form>
+
+        {result && (
+          <>
+            <Divider />
+            <div>
+              <h4>测试结果</h4>
+              <Tag color={result.success ? 'success' : 'error'}>
+                {result.success ? '成功' : '失败'}
+              </Tag>
+              {result.duration_ms && (
+                <Tag style={{ marginLeft: 8 }}>{result.duration_ms}ms</Tag>
+              )}
+              <TextArea
+                rows={10}
+                value={JSON.stringify(result.output_data || result, null, 2)}
+                readOnly
+                style={{ marginTop: 16, fontFamily: 'monospace', background: '#f5f5f5' }}
+              />
+              {result.logs && result.logs.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <h5>执行日志</h5>
+                  <pre style={{ background: '#1e1e1e', color: '#d4d4d4', padding: 12, borderRadius: 4, fontSize: 12, maxHeight: 200, overflow: 'auto' }}>
+                    {result.logs.join('\n')}
+                  </pre>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </Spin>
+    </Modal>
+  )
+}
+
 export const ComponentListPage = () => {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
@@ -88,6 +236,8 @@ export const ComponentListPage = () => {
     pageSize: 10,
     total: 0,
   })
+  const [testModalVisible, setTestModalVisible] = useState(false)
+  const [currentTestComponent, setCurrentTestComponent] = useState<any>(null)
 
   useEffect(() => {
     fetchComponents()
@@ -122,9 +272,14 @@ export const ComponentListPage = () => {
   const handleCreate = () => navigate('/components/new')
   const handleEdit = (id: string) => navigate(`/components/${id}`)
   
-  const handleTest = async (record: any) => {
-    navigate(`/components/${record.id}`)
-    // 可以在这里添加自动打开测试弹窗的逻辑
+  const handleTest = (record: any) => {
+    setCurrentTestComponent(record)
+    setTestModalVisible(true)
+  }
+  
+  const handleCloseTestModal = () => {
+    setTestModalVisible(false)
+    setCurrentTestComponent(null)
   }
   
   const handleDelete = async (id: string) => {
@@ -238,49 +393,54 @@ export const ComponentListPage = () => {
     {
       title: '操作',
       key: 'action',
-      width: 80,
-      render: (_: any, record: any) => {
-        const items = [
-          {
-            key: 'test',
-            icon: <PlayCircleOutlined />,
-            label: '测试',
-            onClick: () => handleTest(record),
-          },
-          {
-            key: 'edit',
-            icon: <EditOutlined />,
-            label: '编辑',
-            onClick: () => handleEdit(record.id),
-          },
-          record.status !== 'published' && {
-            key: 'publish',
-            icon: <CheckCircleOutlined />,
-            label: '发布',
-            onClick: () => handlePublish(record.id),
-          },
-          {
-            key: 'delete',
-            icon: <DeleteOutlined />,
-            label: (
-              <Popconfirm
-                title="确定要删除这个组件吗？"
-                onConfirm={() => handleDelete(record.id)}
-                okText="确定"
-                cancelText="取消"
-              >
-                <span style={{ color: '#ff4d4f' }}>删除</span>
-              </Popconfirm>
-            ),
-          },
-        ].filter((item): item is { key: string; icon: any; label: any; onClick?: () => void } => Boolean(item))
-
-        return (
-          <Dropdown menu={{ items }} placement="bottomRight">
+      width: 120,
+      render: (_: any, record: any) => (
+        <Space>
+          <Tooltip title="测试">
+            <Button
+              type="text"
+              icon={<PlayCircleOutlined style={{ color: '#1890ff' }} />}
+              onClick={() => handleTest(record)}
+            />
+          </Tooltip>
+          <Tooltip title="编辑">
+            <Button
+              type="text"
+              icon={<EditOutlined />}
+              onClick={() => handleEdit(record.id)}
+            />
+          </Tooltip>
+          <Dropdown
+            menu={{
+              items: [
+                record.status !== 'published' && {
+                  key: 'publish',
+                  icon: <CheckCircleOutlined />,
+                  label: '发布',
+                  onClick: () => handlePublish(record.id),
+                },
+                {
+                  key: 'delete',
+                  icon: <DeleteOutlined />,
+                  label: (
+                    <Popconfirm
+                      title="确定要删除这个组件吗？"
+                      onConfirm={() => handleDelete(record.id)}
+                      okText="确定"
+                      cancelText="取消"
+                    >
+                      <span style={{ color: '#ff4d4f' }}>删除</span>
+                    </Popconfirm>
+                  ),
+                },
+              ].filter(Boolean) as any,
+            }}
+            placement="bottomRight"
+          >
             <Button type="text" icon={<MoreOutlined />} />
           </Dropdown>
-        )
-      },
+        </Space>
+      ),
     },
   ]
 
@@ -297,17 +457,12 @@ export const ComponentListPage = () => {
     <div className="component-list-page">
       <Card
         title={
-          <Space>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span>组件管理</span>
-            <Tooltip title="组件是可复用的功能单元，支持多种微服务协议">
-              <ExclamationCircleOutlined style={{ color: '#999' }} />
-            </Tooltip>
-          </Space>
-        }
-        extra={
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
-            注册组件
-          </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
+              注册组件
+            </Button>
+          </div>
         }
       >
         <Tabs
@@ -326,26 +481,13 @@ export const ComponentListPage = () => {
 
         <div style={{ marginBottom: 16, display: 'flex', gap: 12 }}>
           <Search
-            placeholder="搜索组件名称、编码或描述"
+            placeholder="搜索组件名称、编码"
             allowClear
-            enterButton={<><SearchOutlined /> 搜索</>}
-            value={searchText}
+            onSearch={setSearchText}
             onChange={(e) => setSearchText(e.target.value)}
-            onSearch={() => fetchComponents()}
-            style={{ width: 350 }}
+            style={{ width: 300 }}
+            prefix={<SearchOutlined />}
           />
-          <Select
-            placeholder="选择状态"
-            style={{ width: 120 }}
-            allowClear
-            onChange={(v) => {
-              // 可以添加状态筛选逻辑
-            }}
-          >
-            <Option value="development">开发中</Option>
-            <Option value="testing">测试中</Option>
-            <Option value="published">已发布</Option>
-          </Select>
         </div>
 
         <Table
@@ -356,13 +498,19 @@ export const ComponentListPage = () => {
           pagination={{
             ...pagination,
             showSizeChanger: true,
-            showTotal: (total) => `共 ${total} 个组件`,
+            showTotal: (total) => `共 ${total} 条`,
             onChange: (page, pageSize) => {
-              setPagination({ ...pagination, current: page, pageSize })
+              setPagination(prev => ({ current: page, pageSize: pageSize || 10, total: prev.total }))
             },
           }}
         />
       </Card>
+
+      <TestModal
+        visible={testModalVisible}
+        component={currentTestComponent}
+        onClose={handleCloseTestModal}
+      />
     </div>
   )
 }
