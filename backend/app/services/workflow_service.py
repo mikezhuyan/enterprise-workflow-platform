@@ -56,13 +56,20 @@ class WorkflowService:
     @staticmethod
     def create_workflow(db: Session, workflow_data: WorkflowCreate, user_id: UUID, tenant_id: Optional[UUID] = None) -> Workflow:
         """创建工作流"""
+        # 处理definition，支持Pydantic模型或字典
+        definition = workflow_data.definition
+        if hasattr(definition, 'model_dump'):
+            definition = definition.model_dump()
+        elif definition is None:
+            definition = {"nodes": [], "edges": []}
+        
         db_workflow = Workflow(
             name=workflow_data.name,
             description=workflow_data.description,
             version="1.0.0",
             status=WorkflowStatus.DRAFT.value,
             is_template=workflow_data.is_template,
-            definition=workflow_data.definition.model_dump() if workflow_data.definition else {"nodes": [], "edges": []},
+            definition=definition,
             variables=[v.model_dump() for v in workflow_data.variables] if workflow_data.variables else [],
             triggers=[t.model_dump() for t in workflow_data.triggers] if workflow_data.triggers else [],
             category_id=workflow_data.category_id,
@@ -84,9 +91,10 @@ class WorkflowService:
         for field, value in update_data.items():
             if field in ['definition', 'variables', 'triggers'] and value is not None:
                 if field == 'definition':
-                    # 只有Pydantic模型才需要调用model_dump()
+                    # 支持Pydantic模型或字典
                     if hasattr(value, 'model_dump'):
                         value = value.model_dump()
+                    # 如果是字典，直接使用
                 elif field in ['variables', 'triggers']:
                     # 处理列表中的每个元素
                     value = [v.model_dump() if hasattr(v, 'model_dump') else v for v in value]

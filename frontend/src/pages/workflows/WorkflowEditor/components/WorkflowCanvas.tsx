@@ -754,26 +754,81 @@ export const WorkflowCanvas = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>
 
       const nodes = graphData.cells
         .filter((cell: any) => cell.shape && !cell.shape.includes('edge'))
-        .map((cell: any) => ({
-          id: cell.id,
-          type: cell.shape?.replace('-node', ''),
-          position: { x: cell.x || 0, y: cell.y || 0 },
-          data: cell.data || {},
-          width: cell.width || 180,
-          height: cell.height || 60,
-        }))
+        .map((cell: any) => {
+          // X6 toJSON() 格式：position 是对象 {x, y}，size 是对象 {width, height}
+          const x = cell.position?.x ?? 0
+          const y = cell.position?.y ?? 0
+          const width = cell.size?.width ?? 180
+          const height = cell.size?.height ?? 60
+          
+          // 获取节点数据 - X6 的 data 属性
+          const nodeData = cell.data || {}
+          
+          // 获取标签
+          const label = nodeData.label || cell.attrs?.label?.text || cell.attrs?.text?.text || cell.id
+          
+          // 获取节点类型
+          const nodeType = nodeData.type || cell.shape?.replace('-node', '')
+          
+          // 展开 config 中的配置（向后兼容）
+          const nodeConfig = nodeData.config || {}
+          
+          // 关键修复：对于每个属性，优先使用 nodeData 中的值（新数据），如果不存在则使用 nodeConfig 中的值（旧数据）
+          // 这样可以确保更新后的数据不会被旧数据覆盖
+          const mergedConfig: any = {}
+          
+          // 先添加 config 中的所有属性（作为默认值）
+          Object.keys(nodeConfig).forEach(key => {
+            mergedConfig[key] = nodeConfig[key]
+          })
+          
+          // 然后用 nodeData 中的属性覆盖（新数据优先）
+          // 但要排除 'config' 属性本身，避免循环引用
+          Object.keys(nodeData).forEach(key => {
+            if (key !== 'config') {
+              mergedConfig[key] = nodeData[key]
+            }
+          })
+          
+          // 构建最终的 data 对象
+          const finalData = {
+            label,
+            type: nodeType,
+            ...mergedConfig,
+          }
+          
+          return {
+            id: cell.id,
+            type: nodeType,
+            position: { x, y },
+            data: finalData,
+            width,
+            height,
+          }
+        })
 
       const edges = graphData.cells
-        .filter((cell: any) => cell.shape === 'edge')
+        .filter((cell: any) => cell.shape === 'edge' || cell.shape?.includes('edge'))
         .map((cell: any) => ({
           id: cell.id,
-          source: cell.source?.cell,
-          target: cell.target?.cell,
+          source: cell.source?.cell || cell.source,
+          target: cell.target?.cell || cell.target,
           source_handle: cell.source?.port,
           target_handle: cell.target?.port,
-          label: cell.labels?.[0]?.attrs?.label?.text || '',
+          label: cell.labels?.[0]?.attrs?.label?.text || cell.label || '',
         }))
 
+      console.log('[WorkflowCanvas] Converted to definition:', { 
+        nodeCount: nodes.length, 
+        edgeCount: edges.length, 
+        nodes: nodes.map((n: any) => ({ 
+          id: n.id, 
+          type: n.type, 
+          hasUrl: !!n.data?.url,
+          hasMethod: !!n.data?.method,
+          data: n.data 
+        })) 
+      })
       return { nodes, edges }
     }
 
@@ -788,16 +843,28 @@ export const WorkflowCanvas = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>
         return definition
       }
 
-      const nodeCells = (definition.nodes || []).map((node: any) => ({
-        id: node.id,
-        shape: getNodeShape(node.type),
-        x: node.position?.x || 0,
-        y: node.position?.y || 0,
-        width: node.width || 180,
-        height: node.height || 60,
-        label: node.data?.label || node.type,
-        data: node.data || {},
-      }))
+      const nodeCells = (definition.nodes || []).map((node: any) => {
+        const nodeType = node.data?.type || node.type
+        const nodeLabel = node.data?.label || node.label || nodeType
+        const x = node.position?.x || 0
+        const y = node.position?.y || 0
+        const width = node.width || 180
+        const height = node.height || 60
+        
+        // X6 使用 position 和 size 对象
+        return {
+          id: node.id,
+          shape: getNodeShape(nodeType),
+          position: { x, y },
+          size: { width, height },
+          label: nodeLabel,
+          data: {
+            ...node.data,
+            type: nodeType,
+            label: nodeLabel,
+          },
+        }
+      })
 
       const edgeCells = (definition.edges || []).map((edge: any) => ({
         id: edge.id,
@@ -821,12 +888,20 @@ export const WorkflowCanvas = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>
     useImperativeHandle(ref, () => ({
       addNode,
       getGraphData: () => {
-        const rawData = graphRef.current?.toJSON()
+        const graph = graphRef.current
+        if (!graph) return { nodes: [], edges: [] }
+        
+        // 使用 toJSON() 获取画布数据，然后转换
+        const rawData = graph.toJSON()
         return convertToWorkflowDefinition(rawData)
       },
       loadGraphData: (data: any) => {
+        if (!graphRef.current) return
+        // 清空现有画布
+        graphRef.current.clearCells()
+        // 转换并加载新数据
         const x6Data = convertFromWorkflowDefinition(data)
-        graphRef.current?.fromJSON(x6Data)
+        graphRef.current.fromJSON(x6Data)
       },
       getGraph: () => graphRef.current,
     }))

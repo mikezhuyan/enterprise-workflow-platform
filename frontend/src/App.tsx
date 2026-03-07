@@ -6,6 +6,8 @@ import { LoginPage } from './pages/Login'
 import { DashboardPage } from './pages/Dashboard'
 import { WorkflowListPage } from './pages/workflows/WorkflowList'
 import { WorkflowEditorPage } from './pages/workflows/WorkflowEditor'
+import { ExecutionListPage } from './pages/workflows/ExecutionList'
+import { ExecutionDetailPage } from './pages/workflows/ExecutionDetail'
 import { ComponentListPage } from './pages/components/ComponentList'
 import { ComponentEditorPage } from './pages/components/ComponentEditor'
 import { UserListPage } from './pages/users/UserList'
@@ -58,6 +60,8 @@ function App() {
           <Route index element={<WorkflowListPage />} />
           <Route path="new" element={<WorkflowEditorPage />} />
           <Route path=":id" element={<WorkflowEditorPage />} />
+          <Route path=":id/executions" element={<ExecutionListPage />} />
+          <Route path=":workflowId/executions/:executionId" element={<ExecutionDetailPage />} />
         </Route>
         <Route path="components">
           <Route index element={<ComponentListPage />} />

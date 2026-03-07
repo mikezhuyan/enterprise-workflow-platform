@@ -41,16 +41,21 @@ request.interceptors.response.use(
   (error: AxiosError) => {
     console.error('响应错误:', error.message, error.response?.status, error.response?.data)
     
-    const { response } = error
+    const { response, config } = error
     
     if (response) {
       const { status, data } = response as any
       
+      // 排除登录接口，避免登录失败时触发跳转
+      const isLoginRequest = config?.url?.includes('/auth/login')
+      
       switch (status) {
         case 401:
-          message.error('登录已过期，请重新登录')
-          useAuthStore.getState().logout()
-          window.location.href = '/login'
+          if (!isLoginRequest) {
+            message.error('登录已过期，请重新登录')
+            useAuthStore.getState().logout()
+            window.location.href = '/login'
+          }
           break
         case 403:
           message.error('没有权限执行此操作')
@@ -65,7 +70,9 @@ request.interceptors.response.use(
           message.error('服务器内部错误')
           break
         default:
-          message.error(data?.detail || '请求失败')
+          if (!isLoginRequest) {
+            message.error(data?.detail || '请求失败')
+          }
       }
     } else {
       message.error('网络错误，请检查网络连接')

@@ -14,6 +14,8 @@ from app.schemas.workflow import (
 )
 from app.schemas.user import PaginatedResponse
 from app.models.user import User
+from app.models.workflow import ExecutionStatus, NodeExecution
+
 from typing import List, Any
 
 router = APIRouter()
@@ -145,6 +147,10 @@ async def execute_workflow(
     # 异步执行工作流
     if execute_data.synchronous:
         # 同步执行
+        execution.status = ExecutionStatus.RUNNING.value
+        execution.started_at = datetime.utcnow()
+        db.commit()
+        
         result = await engine.execute_workflow(
             workflow.definition,
             execute_data.input_data,
@@ -155,7 +161,39 @@ async def execute_workflow(
         execution.status = ExecutionStatus.SUCCESS.value if result.get("status") == "success" else ExecutionStatus.FAILED.value
         execution.output_data = result
         execution.completed_at = datetime.utcnow()
+        
+        # 计算总耗时
+        if execution.started_at and execution.completed_at:
+            execution.duration_ms = int((execution.completed_at - execution.started_at).total_seconds() * 1000)
+        
         db.commit()
+        
+        # 创建节点执行记录
+        node_results = result.get("results", [])
+        workflow_nodes = {n["id"]: n for n in workflow.definition.get("nodes", [])}
+        
+        for node_result in node_results:
+            node_id = node_result.get("node_id")
+            node_def = workflow_nodes.get(node_id, {})
+            node_data = node_def.get("data", {})
+            
+            node_execution = NodeExecution(
+                execution_id=execution.id,
+                node_id=node_id,
+                node_type=node_def.get("type", "unknown"),
+                node_name=node_data.get("label") or node_data.get("name") or node_id,
+                status="success" if node_result.get("status") == "success" else "failed",
+                input_data={},
+                output_data=node_result.get("output"),
+                error_message=node_result.get("error"),
+                started_at=execution.started_at,
+                completed_at=execution.completed_at,
+                duration_ms=node_result.get("duration_ms", 0),
+            )
+            db.add(node_execution)
+        
+        db.commit()
+        db.refresh(execution)
         
         return execution
     else:
@@ -163,6 +201,7 @@ async def execute_workflow(
         execution.status = ExecutionStatus.RUNNING.value
         execution.started_at = datetime.utcnow()
         db.commit()
+        db.refresh(execution)
         
         return execution
 

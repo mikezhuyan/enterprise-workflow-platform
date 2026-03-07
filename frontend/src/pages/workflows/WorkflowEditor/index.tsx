@@ -12,6 +12,8 @@ import {
   Collapse,
   Badge,
   Tooltip,
+  Table,
+  Tag,
 } from 'antd'
 import {
   SaveOutlined,
@@ -31,6 +33,11 @@ import {
   MailOutlined,
   FileTextOutlined,
   GlobalOutlined,
+  HistoryOutlined,
+  EyeOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  ClockCircleOutlined as ClockIcon,
 } from '@ant-design/icons'
 import WorkflowCanvas, { WorkflowCanvasRef } from './components/WorkflowCanvas'
 import NodeConfigPanel from './components/NodeConfigPanel'
@@ -122,7 +129,12 @@ export const WorkflowEditorPage = () => {
   const [workflowName, setWorkflowName] = useState('')
   const [components, setComponents] = useState<Component[]>([])
   const [, setLoading] = useState(false)
+  const [executions, setExecutions] = useState<any[]>([])
+  const [executionsLoading, setExecutionsLoading] = useState(false)
   const canvasRef = useRef<WorkflowCanvasRef>(null)
+
+  // 使用 Form.useWatch 监听 name 字段变化
+  const watchedName = Form.useWatch('name', form)
 
   // 加载组件列表
   useEffect(() => {
@@ -146,15 +158,25 @@ export const WorkflowEditorPage = () => {
         try {
           setLoading(true)
           const res = await get(`/workflows/${id}`)
+          console.log('[loadWorkflow] Loaded workflow:', res)
           if (res) {
             setWorkflowName(res.name || '')
-            form.setFieldsValue({
-              name: res.name,
-              description: res.description,
-              category: res.category_id,
-            })
+            // 使用 setTimeout 确保表单已经挂载
+            setTimeout(() => {
+              form.setFieldsValue({
+                name: res.name,
+                description: res.description,
+                category: res.category_id,
+              })
+            }, 0)
             // 加载画布数据
             if (res.definition && canvasRef.current) {
+              console.log('[loadWorkflow] Definition nodes:', res.definition.nodes?.map((n: any) => ({
+                id: n.id,
+                type: n.type,
+                url: n.data?.url,
+                protocol: n.data?.protocol
+              })))
               canvasRef.current.loadGraphData(res.definition)
             }
           }
@@ -168,14 +190,52 @@ export const WorkflowEditorPage = () => {
     }
   }, [id, isEditing, form])
 
+  // 加载执行记录
+  const loadExecutions = async () => {
+    if (!id) return
+    
+    try {
+      setExecutionsLoading(true)
+      const res = await get(`/workflows/${id}/executions`, { params: { page: 1, page_size: 10 } })
+      if (res && res.data) {
+        setExecutions(res.data)
+      }
+    } catch (error) {
+      console.error('加载执行记录失败:', error)
+    } finally {
+      setExecutionsLoading(false)
+    }
+  }
+
+  // 当切换到执行记录标签时加载数据
+  useEffect(() => {
+    if (activeTab === 'executions' && id) {
+      loadExecutions()
+    }
+  }, [activeTab, id])
+
   const handleSave = async () => {
     try {
       // 获取表单值（不强制验证）
       const values = form.getFieldsValue()
       const graphData = canvasRef.current?.getGraphData()
       
+      console.log('[handleSave] Form values:', values)
+      console.log('[handleSave] Graph data:', graphData)
+      
       // 如果没有名称，使用默认值
       const name = values.name || workflowName || '未命名工作流'
+      
+      // 检查节点数据 - 特别关注 API 节点的 URL
+      const nodesWithConfig = graphData?.nodes?.map((n: any) => ({
+        id: n.id,
+        type: n.type,
+        url: n.data?.url,
+        protocol: n.data?.protocol,
+        method: n.data?.method,
+        data: n.data
+      }))
+      console.log('[handleSave] Nodes with config:', nodesWithConfig)
       
       const workflowData = {
         name,
@@ -205,8 +265,19 @@ export const WorkflowEditorPage = () => {
     }
   }
 
-  const handlePublish = () => {
-    message.success('工作流发布成功')
+  const handlePublish = async () => {
+    if (!id) {
+      message.warning('请先保存工作流')
+      return
+    }
+    
+    try {
+      await post(`/workflows/${id}/publish`, {})
+      message.success('工作流发布成功')
+    } catch (error: any) {
+      console.error('发布失败:', error)
+      message.error(error.response?.data?.detail || '发布失败')
+    }
   }
 
   const handleExecute = async () => {
@@ -218,16 +289,49 @@ export const WorkflowEditorPage = () => {
     }
     
     try {
-      await post(`/workflows/${id}/execute`, { input_data: {} })
-      message.success('开始执行工作流')
+      message.loading({ content: '正在执行工作流...', key: 'execute', duration: 0 })
+      const result: any = await post(`/workflows/${id}/execute`, { input_data: {} })
+      message.success({ content: '工作流执行完成', key: 'execute' })
+      
+      // 跳转到执行详情页
+      if (result?.id) {
+        navigate(`/workflows/${id}/executions/${result.id}`)
+      }
     } catch (error: any) {
+      message.error({ content: error.response?.data?.detail || '执行失败', key: 'execute' })
       console.error('执行失败:', error)
-      message.error(error.response?.data?.detail || '执行失败')
     }
   }
 
   const handleBack = () => {
     navigate('/workflows')
+  }
+
+  // 查看执行详情
+  const handleViewExecution = (executionId: string) => {
+    navigate(`/workflows/${id}/executions/${executionId}`)
+  }
+
+  // 查看所有执行记录
+  const handleViewAllExecutions = () => {
+    navigate(`/workflows/${id}/executions`)
+  }
+
+  // 获取状态标签
+  const getExecutionStatusTag = (status: string) => {
+    const statusMap: Record<string, { color: string; icon: React.ReactNode; text: string }> = {
+      pending: { color: 'default', icon: <ClockIcon />, text: '待执行' },
+      running: { color: 'processing', icon: <PlayCircleOutlined />, text: '执行中' },
+      success: { color: 'success', icon: <CheckCircleOutlined />, text: '成功' },
+      failed: { color: 'error', icon: <CloseCircleOutlined />, text: '失败' },
+      cancelled: { color: 'warning', icon: <CloseCircleOutlined />, text: '已取消' },
+    }
+    const { color, icon, text } = statusMap[status] || { color: 'default', icon: null, text: status }
+    return (
+      <Tag color={color} icon={icon}>
+        {text}
+      </Tag>
+    )
   }
 
   const handleAddStartNode = () => {
@@ -259,11 +363,31 @@ export const WorkflowEditorPage = () => {
     const cell = graph.getCellById(nodeId)
     if (cell && cell.isNode()) {
       const node = cell as any
-      const data = node.getData() || {}
-      node.setData({ ...data, ...config })
-      if (config.label) {
-        node.attr('label/text', config.label)
+      
+      // config 结构：{ label, ...values, config: values }
+      const { config: nestedConfig, label, ...configValues } = config
+      
+      // 构建新的 data 对象 - 完全替换旧数据
+      const newData = {
+        type: node.data?.type || node.shape?.replace('-node', ''),
+        label: label || node.data?.label || node.attr('label/text'),
+        ...configValues,  // 所有配置值平铺
+        // 同时保存嵌套 config 以保持兼容性
+        config: { ...configValues },
       }
+      
+      // 深拷贝确保数据正确保存
+      const dataToSave = JSON.parse(JSON.stringify(newData))
+      
+      // 使用 setData 保存，完全替换旧数据
+      node.setData(dataToSave)
+      
+      // 更新节点标签
+      if (label) {
+        node.attr('label/text', label)
+      }
+      
+      console.log('[handleNodeSave] Saved node data:', { nodeId, data: dataToSave })
       message.success('节点配置已保存')
     }
   }
@@ -298,7 +422,7 @@ export const WorkflowEditorPage = () => {
         title={
           <Space>
             <span>{isEditing ? '编辑工作流' : '新建工作流'}</span>
-            {workflowName && <span style={{ color: '#999', fontSize: 14 }}>- {workflowName}</span>}
+            {watchedName && <span style={{ color: '#999', fontSize: 14 }}>- {watchedName}</span>}
           </Space>
         }
         extra={
@@ -318,6 +442,34 @@ export const WorkflowEditorPage = () => {
           </Space>
         }
       >
+        {/* 顶部基本信息区域 */}
+        <div className="workflow-basic-info" style={{ marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid #f0f0f0' }}>
+          <Form form={form} layout="inline" style={{ flexWrap: 'nowrap' }}>
+            <Form.Item
+              name="name"
+              label="工作流名称"
+              rules={[{ required: true, message: '请输入工作流名称' }]}
+              style={{ flex: 1, marginRight: 16 }}
+            >
+              <Input
+                placeholder="输入工作流名称"
+                onChange={(e) => setWorkflowName(e.target.value)}
+              />
+            </Form.Item>
+            <Form.Item
+              name="description"
+              label="工作流描述"
+              style={{ flex: 2 }}
+            >
+              <Input.TextArea
+                rows={1}
+                placeholder="描述工作流的功能和用途（可选）"
+                style={{ minHeight: 32, resize: 'none' }}
+              />
+            </Form.Item>
+          </Form>
+        </div>
+
         <Tabs activeKey={activeTab} onChange={setActiveTab}>
           <TabPane tab="设计" key="design">
             <div className="workflow-designer">
@@ -437,22 +589,11 @@ export const WorkflowEditorPage = () => {
 
           <TabPane tab="配置" key="config">
             <Form form={form} layout="vertical" style={{ maxWidth: 800 }}>
-              <Form.Item
-                name="name"
-                label="工作流名称"
-                rules={[{ required: true, message: '请输入工作流名称' }]}
-              >
-                <Input
-                  placeholder="输入工作流名称"
-                  value={workflowName}
-                  onChange={(e) => setWorkflowName(e.target.value)}
-                />
-              </Form.Item>
-              <Form.Item name="description" label="工作流描述">
-                <Input.TextArea rows={4} placeholder="描述工作流的功能和用途" />
-              </Form.Item>
               <Form.Item name="category" label="分类">
                 <Input placeholder="选择分类" />
+              </Form.Item>
+              <Form.Item name="tags" label="标签">
+                <Input placeholder="输入标签，用逗号分隔" />
               </Form.Item>
             </Form>
           </TabPane>
@@ -468,12 +609,64 @@ export const WorkflowEditorPage = () => {
           </TabPane>
 
           <TabPane tab="执行记录" key="executions">
-            <div className="empty-tab">
-              <h3>执行历史</h3>
-              <p>查看工作流执行历史</p>
-              <p style={{ color: '#999', marginTop: 20 }}>
-                功能开发中...
-              </p>
+            <div style={{ padding: 16 }}>
+              <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
+                <h3 style={{ margin: 0 }}>执行历史</h3>
+                <Button type="link" icon={<HistoryOutlined />} onClick={handleViewAllExecutions}>
+                  查看全部
+                </Button>
+              </div>
+              <Table
+                dataSource={executions}
+                rowKey="id"
+                loading={executionsLoading}
+                pagination={false}
+                size="small"
+                columns={[
+                  {
+                    title: '执行ID',
+                    dataIndex: 'id',
+                    key: 'id',
+                    render: (id: string) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{id.substring(0, 8)}...</span>,
+                  },
+                  {
+                    title: '状态',
+                    dataIndex: 'status',
+                    key: 'status',
+                    render: (status: string) => getExecutionStatusTag(status),
+                  },
+                  {
+                    title: '耗时',
+                    dataIndex: 'duration_ms',
+                    key: 'duration_ms',
+                    render: (ms?: number) => {
+                      if (!ms) return '-'
+                      if (ms < 1000) return `${ms}ms`
+                      return `${(ms / 1000).toFixed(2)}s`
+                    },
+                  },
+                  {
+                    title: '创建时间',
+                    dataIndex: 'created_at',
+                    key: 'created_at',
+                    render: (date: string) => new Date(date).toLocaleString('zh-CN'),
+                  },
+                  {
+                    title: '操作',
+                    key: 'action',
+                    render: (_: any, record: any) => (
+                      <Button
+                        type="link"
+                        size="small"
+                        icon={<EyeOutlined />}
+                        onClick={() => handleViewExecution(record.id)}
+                      >
+                        详情
+                      </Button>
+                    ),
+                  },
+                ]}
+              />
             </div>
           </TabPane>
         </Tabs>

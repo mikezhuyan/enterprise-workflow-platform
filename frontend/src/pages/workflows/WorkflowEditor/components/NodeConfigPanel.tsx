@@ -84,6 +84,9 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
   const [config, setConfig] = useState<any>({});
   const [selectedProtocol, setSelectedProtocol] = useState<string>('http');
   const [selectedComponentId, setSelectedComponentId] = useState<string | undefined>();
+  const [selectedComponent, setSelectedComponent] = useState<Component | null>(null);
+  const [lockedFields, setLockedFields] = useState<Set<string>>(new Set());
+  const [hiddenFields, setHiddenFields] = useState<Set<string>>(new Set());
   const [apiComponents, setApiComponents] = useState<Component[]>([]);
   
   const nodeType = node?.data?.type || 'unknown';
@@ -97,16 +100,52 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
 
   useEffect(() => {
     if (node) {
-      const initialConfig = node.data?.config || {};
+      console.log('[NodeConfigPanel] Loading node data:', { id: node.id, data: node.data });
+      
+      // 支持两种配置格式：平铺格式（data.xxx）和嵌套格式（data.config.xxx）
+      // 优先使用平铺格式
+      const nodeData = node.data || {};
+      const nestedConfig = nodeData.config || {};
+      
+      // 合并配置：优先使用平铺的（nodeData），如果平铺的不存在则使用嵌套的（nestedConfig）
+      const initialConfig = {
+        ...nestedConfig,  // 先展开嵌套配置作为默认值
+        ...nodeData,      // 再展开平铺配置（会覆盖嵌套配置中的同名属性）
+      };
+      
+      console.log('[NodeConfigPanel] Initial config:', initialConfig);
+      
+      // 重置表单并设置新值
+      form.resetFields();
       form.setFieldsValue({
-        label: node.data?.label || node.label || '',
+        label: nodeData.label || node.label || '',
         ...initialConfig,
       });
       setConfig(initialConfig);
       setSelectedProtocol(initialConfig.protocol || 'http');
       setSelectedComponentId(initialConfig.componentId);
+      
+      // 恢复组件锁定和隐藏状态
+      if (initialConfig.componentId) {
+        const comp = apiComponents.find(c => c.id === initialConfig.componentId);
+        if (comp && comp.execution_config) {
+          setSelectedComponent(comp);
+          // 锁定组件配置中的字段
+          const execFields = Object.keys(comp.execution_config);
+          setLockedFields(new Set(['protocol', ...execFields]));
+          // 隐藏组件中已配置的字段（有值的字段）
+          const fieldsWithValue = Object.entries(comp.execution_config)
+            .filter(([key, value]) => value !== undefined && value !== null && value !== '')
+            .map(([key]) => key);
+          setHiddenFields(new Set(fieldsWithValue));
+        }
+      } else {
+        setSelectedComponent(null);
+        setLockedFields(new Set());
+        setHiddenFields(new Set());
+      }
     }
-  }, [node, form]);
+  }, [node?.id, node?.data, form, apiComponents]);
 
   if (!node) {
     return (
@@ -140,9 +179,11 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
 
   const handleSave = () => {
     form.validateFields().then((values) => {
+      // 保存时同时保存到 data 和 config（向后兼容）
       onSave(node.id, {
         label: values.label,
-        config: values,
+        ...values,  // 平铺保存所有配置项
+        config: values,  // 同时保留 config 对象（向后兼容）
       });
     });
   };
@@ -155,11 +196,26 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
 
   // 处理组件选择
   const handleComponentSelect = (componentId: string) => {
-    setSelectedComponentId(componentId);
     const selectedComp = apiComponents.find(c => c.id === componentId);
     
-    if (selectedComp && selectedComp.execution_config) {
+    if (!selectedComp) return;
+    
+    setSelectedComponentId(componentId);
+    setSelectedComponent(selectedComp);
+    
+    if (selectedComp.execution_config) {
       const execConfig = selectedComp.execution_config;
+      
+      // 锁定组件配置中的字段
+      const execFields = Object.keys(execConfig);
+      setLockedFields(new Set(['protocol', ...execFields]));
+      
+      // 隐藏组件中已配置的字段（有非空值的字段）
+      const fieldsWithValue = Object.entries(execConfig)
+        .filter(([key, value]) => value !== undefined && value !== null && value !== '')
+        .map(([key]) => key);
+      setHiddenFields(new Set(fieldsWithValue));
+      
       // 自动填充组件配置
       const newValues = {
         componentId,
@@ -168,18 +224,38 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
       };
       form.setFieldsValue(newValues);
       setSelectedProtocol(execConfig.protocol || 'http');
-      message.success(`已加载组件「${selectedComp.name}」的配置`);
+      
+      const hiddenFieldNames = fieldsWithValue.filter(f => f !== 'protocol').join(', ');
+      if (hiddenFieldNames) {
+        message.success(`已加载组件「${selectedComp.name}」，${fieldsWithValue.length}个参数已预设`);
+      } else {
+        message.success(`已加载组件「${selectedComp.name}」`);
+      }
     }
   };
 
   // 清除组件选择
   const handleClearComponent = () => {
     setSelectedComponentId(undefined);
+    setSelectedComponent(null);
+    setLockedFields(new Set());
+    setHiddenFields(new Set());
     form.setFieldsValue({ componentId: undefined });
+    message.info('已清除组件选择，可以自定义配置');
+  };
+
+  // 检查字段是否被锁定
+  const isFieldLocked = (fieldName: string): boolean => {
+    return lockedFields.has(fieldName);
+  };
+
+  // 检查字段是否被隐藏（组件中已配置）
+  const isFieldHidden = (fieldName: string): boolean => {
+    return hiddenFields.has(fieldName);
   };
 
   // 渲染表单字段
-  const renderField = (field: ConfigField) => {
+  const renderField = (field: ConfigField, disabled: boolean = false) => {
     // 对于API节点，根据协议过滤字段
     if (nodeType === 'api') {
       const protocolFields = protocolFieldMap[selectedProtocol] || [];
@@ -193,9 +269,11 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
       }
     }
 
+    const isLocked = disabled || isFieldLocked(field.name);
     const commonProps = {
       placeholder: field.placeholder,
       style: { width: '100%' },
+      disabled: isLocked,
     };
 
     switch (field.type) {
@@ -213,7 +291,7 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
         );
       
       case 'boolean':
-        return <Switch defaultChecked={field.defaultValue} />;
+        return <Switch defaultChecked={field.defaultValue} disabled={isLocked} />;
       
       case 'textarea':
         return <TextArea {...commonProps} rows={4} />;
@@ -384,46 +462,94 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
       case 'condition':
         return renderConditionConfig();
       case 'api':
+        // 获取当前协议的所有字段
+        const protocolFields = protocolFieldMap[selectedProtocol] || [];
+        
         return (
           <>
             <Divider orientation="left">基础配置</Divider>
-            {nodeDef.configFields
-              .filter(field => field.name === 'protocol' || field.name === 'componentId')
-              .map((field) => (
-                <Form.Item
-                  key={field.name}
-                  name={field.name}
-                  label={field.label}
-                  rules={field.required ? [{ required: true, message: `请输入${field.label}` }] : []}
-                  help={field.description}
+            
+            {/* 组件选择 - 始终放在第一个 */}
+            <Form.Item
+              name="componentId"
+              label="选择已注册组件"
+              help="选择已注册的API组件可自动填充配置参数"
+            >
+              <Space direction="vertical" style={{ width: '100%' }}>
+                <Select 
+                  showSearch
+                  value={selectedComponentId}
+                  onChange={handleComponentSelect}
+                  placeholder="请选择（可选）"
+                  allowClear
+                  onClear={handleClearComponent}
+                  style={{ width: '100%' }}
                 >
-                  {renderField(field)}
-                </Form.Item>
-              ))}
+                  {apiComponents.map((comp) => (
+                    <Option key={comp.id} value={comp.id}>
+                      <Space>
+                        <span>{comp.name}</span>
+                        <Tag color="blue" style={{ fontSize: 12 }}>{comp.execution_config?.protocol || 'http'}</Tag>
+                        <span style={{ color: '#999', fontSize: 12 }}>{comp.code}</span>
+                      </Space>
+                    </Option>
+                  ))}
+                </Select>
+                {selectedComponentId && (
+                  <Button type="link" size="small" onClick={handleClearComponent} style={{ padding: 0 }}>
+                    清除选择，使用自定义配置
+                  </Button>
+                )}
+              </Space>
+            </Form.Item>
             
-            <Divider orientation="left">{selectedProtocol.toUpperCase()} 协议配置</Divider>
+            {/* 协议选择 */}
+            {!selectedComponentId && (
+              <Form.Item
+                name="protocol"
+                label="协议类型"
+                rules={[{ required: true }]}
+              >
+                <Select onChange={handleProtocolChange}>
+                  <Option value="http">HTTP</Option>
+                  <Option value="https">HTTPS</Option>
+                  <Option value="grpc">gRPC</Option>
+                  <Option value="graphql">GraphQL</Option>
+                  <Option value="soap">SOAP</Option>
+                  <Option value="websocket">WebSocket</Option>
+                </Select>
+              </Form.Item>
+            )}
             
+            {/* 已选择组件时的提示 */}
             {selectedComponentId && (
               <Alert
-                message="已加载组件配置"
-                description="以下配置来自所选组件，您可以直接使用或修改"
+                message={`已继承组件「${selectedComponent?.name}」的配置`}
+                description={
+                  hiddenFields.size > 0 
+                    ? `其中 ${hiddenFields.size} 个参数已预设，下方仅显示需要补充的配置项`
+                    : '组件配置已加载'
+                }
                 type="info"
                 showIcon
                 style={{ marginBottom: 16 }}
                 action={
                   <Button size="small" type="link" onClick={handleClearComponent}>
-                    清除
+                    清除继承
                   </Button>
                 }
               />
             )}
             
+            {/* 协议配置 - 过滤掉已隐藏的字段 */}
             {nodeDef.configFields
               .filter(field => {
-                const protocolFields = protocolFieldMap[selectedProtocol] || [];
                 const commonFields = ['protocol', 'componentId', 'timeout'];
-                return protocolFields.includes(field.name) || 
-                       (field.name === 'timeout' && !commonFields.includes(field.name));
+                // 只显示当前协议的字段 + timeout
+                const shouldShow = protocolFields.includes(field.name) || field.name === 'timeout';
+                // 但隐藏组件中已配置的字段
+                const isHidden = isFieldHidden(field.name);
+                return shouldShow && !isHidden && !commonFields.includes(field.name);
               })
               .map((field) => (
                 <Form.Item
@@ -436,6 +562,16 @@ export const NodeConfigPanel: React.FC<NodeConfigPanelProps> = ({
                   {renderField(field)}
                 </Form.Item>
               ))}
+            
+            {/* 始终显示 timeout（如果未被隐藏） */}
+            {!isFieldHidden('timeout') && (
+              <Form.Item
+                name="timeout"
+                label="超时时间(秒)"
+              >
+                <InputNumber min={1} max={300} style={{ width: '100%' }} placeholder="30" />
+              </Form.Item>
+            )}
           </>
         );
       default:

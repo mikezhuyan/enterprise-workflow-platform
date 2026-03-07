@@ -173,37 +173,162 @@ class WorkflowNodeExecutor:
     async def _handle_end(self, node_data: Dict, input_data: Dict, context: ExecutionContext, logs: List[str]) -> Any:
         """处理结束节点"""
         logs.append("工作流执行完成")
+        # 只返回之前的节点输出，不包含当前 end 节点（避免循环引用）
+        previous_outputs = {k: v for k, v in context.node_outputs.items()}
         return {
             "completed_at": datetime.utcnow().isoformat(),
-            "variables": context.variables,
-            "outputs": context.node_outputs
+            "variables": context.variables.copy(),
+            "outputs": previous_outputs
         }
     
     async def _handle_api(self, node_data: Dict, input_data: Dict, context: ExecutionContext, logs: List[str]) -> Any:
         """处理API节点"""
         import httpx
         
+        # 支持两种配置格式：平铺格式（前端直接保存）和嵌套格式
+        # 优先从 api_config 获取，如果不存在则直接从 node_data 获取
         config = node_data.get("api_config", {})
+        
+        # 如果 api_config 为空，尝试从 node_data 直接读取（前端保存的格式）
+        if not config:
+            config = {
+                "method": node_data.get("method", "GET"),
+                "url": node_data.get("url", ""),
+                "headers": node_data.get("headers", {}),
+                "body": node_data.get("body", {}),
+                "timeout": node_data.get("timeout", 30),
+            }
+        
         method = config.get("method", "GET")
         url = config.get("url", "")
         headers = config.get("headers", {})
-        timeout = config.get("timeout", 30)
+        if isinstance(headers, str):
+            try:
+                headers = json.loads(headers)
+            except:
+                headers = {}
+        timeout = int(config.get("timeout", 30))
+        body = config.get("body", input_data)
+        
+        # 处理 URL 变量替换
+        url = self._replace_variables(url, context)
+        
+        # 处理 Headers 变量替换
+        if isinstance(headers, dict):
+            headers = {k: self._replace_variables(str(v), context) for k, v in headers.items()}
         
         logs.append(f"发起 {method} 请求到 {url}")
         
-        async with httpx.AsyncClient() as client:
-            try:
+        if not url:
+            raise ValueError("API URL 不能为空")
+        
+        # 验证 URL 格式
+        if not url.startswith(('http://', 'https://')):
+            raise ValueError(f"URL 格式不正确: {url}")
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                request_kwargs = {
+                    "headers": headers or None,
+                    "timeout": timeout
+                }
+                
+                # 记录请求详情
+                logs.append(f"请求方法: {method.upper()}")
+                logs.append(f"请求URL: {url}")
+                if headers:
+                    logs.append(f"请求头: {headers}")
+                if body and method.upper() in ["POST", "PUT", "PATCH"]:
+                    logs.append(f"请求体: {body}")
+                
                 if method.upper() == "GET":
-                    response = await client.get(url, headers=headers, timeout=timeout)
+                    response = await client.get(url, **request_kwargs)
                 elif method.upper() == "POST":
-                    response = await client.post(url, json=input_data, headers=headers, timeout=timeout)
+                    # 处理 body 变量替换
+                    if isinstance(body, dict):
+                        body = {k: self._replace_variables(str(v), context) if isinstance(v, str) else v 
+                                for k, v in body.items()}
+                    request_kwargs["json"] = body if body else None
+                    logs.append(f"实际发送的请求体: {body}")
+                    response = await client.post(url, **request_kwargs)
+                elif method.upper() == "PUT":
+                    if isinstance(body, dict):
+                        body = {k: self._replace_variables(str(v), context) if isinstance(v, str) else v 
+                                for k, v in body.items()}
+                    request_kwargs["json"] = body if body else None
+                    response = await client.put(url, **request_kwargs)
+                elif method.upper() == "DELETE":
+                    response = await client.delete(url, **request_kwargs)
+                elif method.upper() == "PATCH":
+                    if isinstance(body, dict):
+                        body = {k: self._replace_variables(str(v), context) if isinstance(v, str) else v 
+                                for k, v in body.items()}
+                    request_kwargs["json"] = body if body else None
+                    response = await client.patch(url, **request_kwargs)
                 else:
                     raise ValueError(f"不支持的HTTP方法: {method}")
                 
-                response.raise_for_status()
-                return response.json()
-            except httpx.HTTPError as e:
-                raise Exception(f"API请求失败: {str(e)}")
+                # 检查状态码
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    # 提供更有用的错误信息
+                    error_msg = f"HTTP {e.response.status_code}"
+                    if e.response.status_code == 404:
+                        error_msg = f"HTTP 404 - 请求的资源不存在。请检查:\n"
+                        error_msg += f"1. URL 是否正确: {url}\n"
+                        error_msg += f"2. 服务器是否支持该路径\n"
+                        error_msg += f"3. 如果是前端开发服务器(如5173端口)，它可能不支持API请求"
+                    elif e.response.status_code == 500:
+                        error_msg = f"HTTP 500 - 服务器内部错误"
+                    
+                    logs.append(f"请求失败: {error_msg}")
+                    raise Exception(f"API返回错误: {error_msg}")
+                
+                logs.append(f"请求成功，状态码: {response.status_code}")
+                
+                # 尝试解析 JSON，如果失败返回文本
+                try:
+                    return response.json()
+                except:
+                    return {"status_code": response.status_code, "text": response.text[:1000]}
+                    
+        except httpx.TimeoutException as e:
+            raise Exception(f"API请求超时 ({timeout}秒): {str(e)}")
+        except httpx.ConnectError as e:
+            raise Exception(f"API连接失败: 无法连接到 {url}\n请检查:\n1. 服务器是否运行\n2. 端口是否正确\n3. 网络是否通畅")
+        except Exception as e:
+            raise e
+    
+    def _replace_variables(self, text: str, context: ExecutionContext) -> str:
+        """替换文本中的变量引用"""
+        import re
+        
+        # 支持 {{variable}} 和 {{node_id.output}} 格式
+        pattern = r'\{\{(\w+)(?:\.(\w+))?\}\}'
+        
+        def replace(match):
+            var_name = match.group(1)
+            var_attr = match.group(2)
+            
+            # 先尝试从变量获取
+            value = context.get_variable(var_name)
+            if value is not None and var_attr:
+                if isinstance(value, dict):
+                    value = value.get(var_attr)
+            
+            # 再尝试从节点输出获取
+            if value is None:
+                node_output = context.get_node_output(var_name)
+                if node_output is not None:
+                    if var_attr and isinstance(node_output, dict):
+                        value = node_output.get(var_attr)
+                    else:
+                        value = node_output
+            
+            return str(value) if value is not None else match.group(0)
+        
+        return re.sub(pattern, replace, text)
     
     async def _handle_condition(self, node_data: Dict, input_data: Dict, context: ExecutionContext, logs: List[str]) -> Any:
         """处理条件节点"""
@@ -317,21 +442,47 @@ class WorkflowEngine:
                 start_node, nodes, connections, context, results
             )
             
+            # 将 NodeExecutionResult 转换为字典
+            results_dict = [
+                {
+                    "node_id": r.node_id,
+                    "status": r.status.value if isinstance(r.status, NodeStatus) else r.status,
+                    "output": r.output,
+                    "error": r.error,
+                    "duration_ms": r.duration_ms,
+                    "logs": r.logs
+                }
+                for r in results
+            ]
+            
             return {
                 "execution_id": execution_id,
                 "status": "success",
-                "results": results,
+                "results": results_dict,
                 "context": {
                     "variables": context.variables,
                     "outputs": context.node_outputs
                 }
             }
         except Exception as e:
+            # 将 NodeExecutionResult 转换为字典
+            results_dict = [
+                {
+                    "node_id": r.node_id,
+                    "status": r.status.value if isinstance(r.status, NodeStatus) else r.status,
+                    "output": r.output,
+                    "error": r.error,
+                    "duration_ms": r.duration_ms,
+                    "logs": r.logs
+                }
+                for r in results
+            ]
+            
             return {
                 "execution_id": execution_id,
                 "status": "failed",
                 "error": str(e),
-                "results": results
+                "results": results_dict
             }
     
     def _build_connections(self, nodes: Dict, edges: List[Dict]) -> Dict[str, List[str]]:
