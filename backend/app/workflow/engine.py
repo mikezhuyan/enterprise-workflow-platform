@@ -96,6 +96,7 @@ class WorkflowNodeExecutor:
         self.handlers[NodeType.LLM] = self._handle_llm
         self.handlers[NodeType.MCP] = self._handle_mcp
         self.handlers[NodeType.AGENT] = self._handle_agent
+        self.handlers[NodeType.SCRIPT] = self._handle_script
     
     async def execute(self, node: Dict[str, Any], context: ExecutionContext) -> NodeExecutionResult:
         """执行节点"""
@@ -273,13 +274,32 @@ class WorkflowNodeExecutor:
                     response.raise_for_status()
                 except httpx.HTTPStatusError as e:
                     # 提供更有用的错误信息
-                    error_msg = f"HTTP {e.response.status_code}"
-                    if e.response.status_code == 404:
+                    status_code = e.response.status_code
+                    error_msg = f"HTTP {status_code}"
+                    if status_code in [301, 302, 307, 308]:
+                        location = e.response.headers.get('location', '未知')
+                        error_msg = f"HTTP {status_code} - 请求被重定向\n"
+                        error_msg += f"目标地址: {url}\n"
+                        error_msg += f"重定向到: {location}\n"
+                        error_msg += f"建议: 请使用最终的重定向地址，或确保URL格式正确"
+                    elif status_code == 400:
+                        error_msg = f"HTTP 400 - 请求参数错误。请检查:\n"
+                        error_msg += f"1. 请求参数是否正确\n"
+                        error_msg += f"2. 请求体格式是否符合API要求"
+                    elif status_code == 401:
+                        error_msg = f"HTTP 401 - 未授权。请检查:\n"
+                        error_msg += f"1. API密钥或认证信息是否正确\n"
+                        error_msg += f"2. 认证头格式是否正确"
+                    elif status_code == 403:
+                        error_msg = f"HTTP 403 - 禁止访问。请检查:\n"
+                        error_msg += f"1. 是否有权限访问该资源\n"
+                        error_msg += f"2. IP是否被限制"
+                    elif status_code == 404:
                         error_msg = f"HTTP 404 - 请求的资源不存在。请检查:\n"
                         error_msg += f"1. URL 是否正确: {url}\n"
                         error_msg += f"2. 服务器是否支持该路径\n"
                         error_msg += f"3. 如果是前端开发服务器(如5173端口)，它可能不支持API请求"
-                    elif e.response.status_code == 500:
+                    elif status_code == 500:
                         error_msg = f"HTTP 500 - 服务器内部错误"
                     
                     logs.append(f"请求失败: {error_msg}")
@@ -396,6 +416,39 @@ class WorkflowNodeExecutor:
             "executed_skills": skill_codes,
             "result": "Agent执行结果"
         }
+    
+    async def _handle_script(self, node_data: Dict, input_data: Dict, context: ExecutionContext, logs: List[str]) -> Any:
+        """处理脚本节点"""
+        script_code = node_data.get("script", node_data.get("code", ""))
+        language = node_data.get("language", "python").lower()
+        
+        logs.append(f"执行脚本节点，语言: {language}")
+        
+        if not script_code:
+            return {"result": None, "message": "脚本为空"}
+        
+        try:
+            # 创建执行环境，包含输入数据和上下文变量
+            exec_globals = {
+                "input": input_data,
+                "context": context.variables,
+                "output": {},
+                "print": lambda *args: logs.append(" ".join(str(a) for a in args))
+            }
+            exec_locals = {}
+            
+            # 执行脚本
+            exec(script_code, exec_globals, exec_locals)
+            
+            # 获取输出结果
+            result = exec_locals.get("output", exec_globals.get("output", {}))
+            
+            logs.append("脚本执行成功")
+            return {"result": result, "language": language}
+            
+        except Exception as e:
+            logs.append(f"脚本执行失败: {str(e)}")
+            raise Exception(f"脚本执行错误: {str(e)}")
 
 
 class WorkflowEngine:

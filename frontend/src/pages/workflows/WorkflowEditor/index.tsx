@@ -175,7 +175,9 @@ export const WorkflowEditorPage = () => {
                 id: n.id,
                 type: n.type,
                 url: n.data?.url,
-                protocol: n.data?.protocol
+                protocol: n.data?.protocol,
+                componentId: n.data?.componentId,
+                hasComponentId: !!n.data?.componentId
               })))
               canvasRef.current.loadGraphData(res.definition)
             }
@@ -226,13 +228,14 @@ export const WorkflowEditorPage = () => {
       // 如果没有名称，使用默认值
       const name = values.name || workflowName || '未命名工作流'
       
-      // 检查节点数据 - 特别关注 API 节点的 URL
+      // 检查节点数据 - 特别关注 API 节点的 URL 和 componentId
       const nodesWithConfig = graphData?.nodes?.map((n: any) => ({
         id: n.id,
         type: n.type,
         url: n.data?.url,
         protocol: n.data?.protocol,
         method: n.data?.method,
+        componentId: n.data?.componentId,
         data: n.data
       }))
       console.log('[handleSave] Nodes with config:', nodesWithConfig)
@@ -367,6 +370,8 @@ export const WorkflowEditorPage = () => {
       // config 结构：{ label, ...values, config: values }
       const { config: nestedConfig, label, ...configValues } = config
       
+      console.log('[handleNodeSave] Saving config:', { nodeId, configValues, hasComponentId: !!configValues.componentId })
+      
       // 构建新的 data 对象 - 完全替换旧数据
       const newData = {
         type: node.data?.type || node.shape?.replace('-node', ''),
@@ -379,8 +384,10 @@ export const WorkflowEditorPage = () => {
       // 深拷贝确保数据正确保存
       const dataToSave = JSON.parse(JSON.stringify(newData))
       
+      console.log('[handleNodeSave] Data to save:', { nodeId, dataToSave, hasComponentId: !!dataToSave.componentId })
+      
       // 使用 setData 保存，完全替换旧数据
-      node.setData(dataToSave)
+      node.setData(dataToSave, { overwrite: true })
       
       // 更新节点标签
       if (label) {

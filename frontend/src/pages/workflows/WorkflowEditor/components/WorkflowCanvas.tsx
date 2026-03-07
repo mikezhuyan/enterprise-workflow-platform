@@ -797,6 +797,14 @@ export const WorkflowCanvas = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>
             ...mergedConfig,
           }
           
+          // 调试日志：检查 componentId
+          if (mergedConfig.componentId) {
+            console.log('[convertToWorkflowDefinition] Node has componentId:', { 
+              id: cell.id, 
+              componentId: mergedConfig.componentId 
+            })
+          }
+          
           return {
             id: cell.id,
             type: nodeType,
@@ -826,6 +834,8 @@ export const WorkflowCanvas = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>
           type: n.type, 
           hasUrl: !!n.data?.url,
           hasMethod: !!n.data?.method,
+          hasComponentId: !!n.data?.componentId,
+          componentId: n.data?.componentId,
           data: n.data 
         })) 
       })

@@ -9,6 +9,8 @@ import {
   Dropdown,
   message,
   Popconfirm,
+  Tooltip,
+  Space,
 } from 'antd'
 import {
   PlusOutlined,
@@ -19,6 +21,7 @@ import {
   DeleteOutlined,
   CopyOutlined,
   HistoryOutlined,
+  CaretRightFilled,
 } from '@ant-design/icons'
 import { get, post, del } from '../../../utils/request'
 
@@ -158,52 +161,60 @@ export const WorkflowListPage = () => {
     {
       title: '操作',
       key: 'action',
-      width: 80,
-      render: (_: any, record: any) => {
-        const items = [
-          { 
-            key: 'execute', 
-            icon: <PlayCircleOutlined />, 
-            label: '执行', 
-            onClick: () => handleExecute(record.id) 
-          },
-          { 
-            key: 'edit', 
-            icon: <EditOutlined />, 
-            label: '编辑', 
-            onClick: () => handleEdit(record.id) 
-          },
-          { 
-            key: 'executions', 
-            icon: <HistoryOutlined />, 
-            label: '执行记录', 
-            onClick: () => handleViewExecutions(record.id) 
-          },
-          { 
-            key: 'copy', 
-            icon: <CopyOutlined />, 
-            label: '复制',
-            onClick: () => message.info('复制功能开发中'),
-          },
-          {
-            key: 'delete',
-            icon: <DeleteOutlined />,
-            label: (
-              <Popconfirm 
-                title="确定要删除这个工作流吗？" 
-                onConfirm={() => handleDelete(record.id)}
-              >
-                <span style={{ color: '#ff4d4f' }}>删除</span>
-              </Popconfirm>
-            ),
-          },
-        ]
-        return (
-          <Dropdown menu={{ items }} placement="bottomRight">
+      width: 180,
+      render: (_: any, record: any) => (
+        <Space>
+          <Tooltip title="测试执行">
+            <Button
+              type="primary"
+              size="small"
+              icon={<CaretRightFilled />}
+              onClick={() => handleExecute(record.id)}
+            >
+              测试
+            </Button>
+          </Tooltip>
+          <Dropdown
+            menu={{
+              items: [
+                { 
+                  key: 'edit', 
+                  icon: <EditOutlined />, 
+                  label: '编辑', 
+                  onClick: () => handleEdit(record.id) 
+                },
+                { 
+                  key: 'executions', 
+                  icon: <HistoryOutlined />, 
+                  label: '执行记录', 
+                  onClick: () => handleViewExecutions(record.id) 
+                },
+                { 
+                  key: 'copy', 
+                  icon: <CopyOutlined />, 
+                  label: '复制',
+                  onClick: () => message.info('复制功能开发中'),
+                },
+                {
+                  key: 'delete',
+                  icon: <DeleteOutlined />,
+                  label: (
+                    <Popconfirm 
+                      title="确定要删除这个工作流吗？" 
+                      onConfirm={() => handleDelete(record.id)}
+                    >
+                      <span style={{ color: '#ff4d4f' }}>删除</span>
+                    </Popconfirm>
+                  ),
+                },
+              ],
+            }}
+            placement="bottomRight"
+          >
             <Button type="text" icon={<MoreOutlined />} />
           </Dropdown>
-        )
-      },
+        </Space>
+      ),
     },
   ]
 
