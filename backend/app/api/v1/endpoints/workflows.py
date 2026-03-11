@@ -11,6 +11,9 @@ from app.schemas.workflow import (
     WorkflowCreate, WorkflowUpdate, WorkflowResponse, WorkflowListResponse,
     WorkflowExecuteRequest, WorkflowExecutionResponse, ExecutionDetailResponse,
     WorkflowCategoryCreate, WorkflowCategoryResponse, WorkflowStatsResponse,
+    WorkflowVersionCreate, WorkflowVersionResponse, WorkflowVersionListResponse,
+    WorkflowRollbackRequest, WorkflowRollbackResponse,
+    WorkflowVersionCompareRequest, WorkflowVersionCompareResponse,
 )
 from app.schemas.user import PaginatedResponse
 from app.models.user import User
@@ -344,3 +347,169 @@ def get_workflow_stats(
         "executions_this_week": 0,
         "executions_this_month": 0
     }
+
+
+# ============ 版本控制 ============
+
+@router.post("/{workflow_id}/versions", response_model=WorkflowVersionResponse, status_code=status.HTTP_201_CREATED)
+def create_workflow_version(
+    workflow_id: UUID,
+    version_data: WorkflowVersionCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """创建工作流新版本"""
+    workflow = WorkflowService.get_by_id(db, workflow_id)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="工作流不存在")
+    
+    # 检查权限
+    if workflow.created_by != current_user.id and not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="无权为此工作流创建版本")
+    
+    # 创建新版本
+    new_version = WorkflowService.create_version(
+        db,
+        workflow,
+        version_type=version_data.version_type,
+        comment=version_data.comment,
+        user_id=current_user.id
+    )
+    
+    # 提取版本说明
+    definition = new_version.definition or {}
+    comment = definition.get("_version_comment") if isinstance(definition, dict) else None
+    
+    return WorkflowVersionResponse(
+        id=new_version.id,
+        name=new_version.name,
+        version=new_version.version,
+        status=new_version.status,
+        description=new_version.description,
+        created_by=new_version.created_by,
+        created_at=new_version.created_at,
+        parent_id=new_version.parent_id,
+        comment=comment
+    )
+
+
+@router.get("/{workflow_id}/versions", response_model=WorkflowVersionListResponse)
+def list_workflow_versions(
+    workflow_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取工作流的所有版本"""
+    workflow = WorkflowService.get_by_id(db, workflow_id)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="工作流不存在")
+    
+    # 获取所有版本
+    versions = WorkflowService.get_versions(db, workflow_id, include_parent=True)
+    
+    # 转换为响应格式
+    version_list = []
+    for v in versions:
+        definition = v.definition or {}
+        comment = definition.get("_version_comment") if isinstance(definition, dict) else None
+        version_list.append(WorkflowVersionResponse(
+            id=v.id,
+            name=v.name,
+            version=v.version,
+            status=v.status,
+            description=v.description,
+            created_by=v.created_by,
+            created_at=v.created_at,
+            parent_id=v.parent_id,
+            comment=comment
+        ))
+    
+    return WorkflowVersionListResponse(
+        versions=version_list,
+        total=len(version_list)
+    )
+
+
+@router.get("/{workflow_id}/versions/{version}", response_model=WorkflowResponse)
+def get_workflow_version(
+    workflow_id: UUID,
+    version: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取指定版本的工作流"""
+    target_version = WorkflowService.get_version_by_number(db, workflow_id, version)
+    if not target_version:
+        raise HTTPException(status_code=404, detail="指定版本不存在")
+    
+    return target_version
+
+
+@router.post("/{workflow_id}/versions/{version}/rollback", response_model=WorkflowRollbackResponse)
+def rollback_to_version(
+    workflow_id: UUID,
+    version: str,
+    rollback_data: WorkflowRollbackRequest = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """回滚到指定版本"""
+    workflow = WorkflowService.get_by_id(db, workflow_id)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="工作流不存在")
+    
+    # 检查权限
+    if workflow.created_by != current_user.id and not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="无权回滚此工作流")
+    
+    # 检查目标版本是否存在
+    target = WorkflowService.get_version_by_number(db, workflow_id, version)
+    if not target:
+        raise HTTPException(status_code=404, detail="目标版本不存在")
+    
+    # 执行回滚
+    comment = rollback_data.comment if rollback_data else None
+    new_workflow = WorkflowService.rollback_to_version(
+        db,
+        workflow_id,
+        version,
+        user_id=current_user.id
+    )
+    
+    if not new_workflow:
+        raise HTTPException(status_code=500, detail="回滚失败")
+    
+    return WorkflowRollbackResponse(
+        message=f"成功回滚到版本 {version}",
+        new_version=new_workflow.version,
+        workflow_id=new_workflow.id
+    )
+
+
+@router.get("/{workflow_id}/versions/compare", response_model=WorkflowVersionCompareResponse)
+def compare_workflow_versions(
+    workflow_id: UUID,
+    version1: str = Query(..., description="基准版本号"),
+    version2: str = Query(..., description="对比版本号"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """比较两个版本的差异"""
+    workflow = WorkflowService.get_by_id(db, workflow_id)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="工作流不存在")
+    
+    # 比较版本
+    result = WorkflowService.compare_versions(db, workflow_id, version1, version2)
+    
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    
+    return WorkflowVersionCompareResponse(
+        version1=result["version1"],
+        version2=result["version2"],
+        workflow_id=result["workflow_id"],
+        changes=result["changes"],
+        summary=result["summary"],
+        diff_text=result.get("diff_text")
+    )

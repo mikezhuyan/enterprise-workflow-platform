@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import List, Optional, Dict, Any
+from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
 from uuid import UUID
 
@@ -254,3 +255,157 @@ class WorkflowStatsResponse(BaseSchema):
     executions_today: int
     executions_this_week: int
     executions_this_month: int
+
+
+# ============ 版本控制Schema ============
+
+class WorkflowVersionCreate(BaseSchema):
+    """创建工作流版本请求"""
+    version_type: str = "minor"  # major, minor, patch
+    comment: Optional[str] = None
+
+
+class WorkflowVersionResponse(BaseSchema):
+    """工作流版本响应"""
+    id: UUID
+    name: str
+    version: str
+    status: str
+    description: Optional[str]
+    created_by: UUID
+    created_at: datetime
+    parent_id: Optional[UUID]
+    comment: Optional[str] = None  # 版本说明
+
+
+class WorkflowVersionListResponse(BaseSchema):
+    """版本列表响应"""
+    versions: List[WorkflowVersionResponse]
+    total: int
+
+
+class WorkflowRollbackRequest(BaseSchema):
+    """回滚请求"""
+    comment: Optional[str] = None
+
+
+class WorkflowRollbackResponse(BaseSchema):
+    """回滚响应"""
+    message: str
+    new_version: str
+    workflow_id: UUID
+
+
+class WorkflowVersionCompareRequest(BaseSchema):
+    """版本比较请求"""
+    version1: str  # 基准版本
+    version2: str  # 对比版本
+
+
+class WorkflowVersionChange(BaseSchema):
+    """版本变更详情"""
+    field: str
+    type: str  # added, removed, modified
+    old: Optional[Any] = None
+    new: Optional[Any] = None
+    added: Optional[List[str]] = None
+    removed: Optional[List[str]] = None
+    node_changes: Optional[List[Dict[str, Any]]] = None
+    edge_changes: Optional[List[Dict[str, Any]]] = None
+
+
+class WorkflowVersionCompareSummary(BaseSchema):
+    """版本比较摘要"""
+    total_changes: int
+    nodes_added: int
+    nodes_removed: int
+    nodes_modified: int
+    edges_added: int
+    edges_removed: int
+
+
+class WorkflowVersionCompareResponse(BaseSchema):
+    """版本比较响应"""
+    version1: str
+    version2: str
+    workflow_id: UUID
+    changes: List[WorkflowVersionChange]
+    summary: WorkflowVersionCompareSummary
+    diff_text: Optional[str] = None
+
+
+# ============ 审批任务Schema ============
+
+class ApprovalTaskStatus(str, Enum):
+    """审批任务状态"""
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    TRANSFERRED = "transferred"
+
+
+class ApprovalTaskBase(BaseSchema):
+    """审批任务基础Schema"""
+    node_id: str
+    node_name: Optional[str] = None
+    assignee_type: str = "user"  # user, role, department
+    assignee_id: UUID
+    timeout_seconds: int = 86400
+    auto_action: str = "reject"
+
+
+class ApprovalTaskCreate(ApprovalTaskBase):
+    """创建审批任务"""
+    execution_id: UUID
+    input_data: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ApprovalTaskResponse(ApprovalTaskBase):
+    """审批任务响应"""
+    id: UUID
+    execution_id: UUID
+    status: str  # pending, approved, rejected, transferred
+    comment: Optional[str] = None
+    transferred_from: Optional[UUID] = None
+    transferred_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    completed_by: Optional[UUID] = None
+    timeout_at: Optional[datetime] = None
+    input_data: Dict[str, Any]
+    output_data: Dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ApprovalTaskListResponse(BaseSchema):
+    """审批任务列表响应"""
+    id: UUID
+    execution_id: UUID
+    node_id: str
+    node_name: Optional[str] = None
+    status: str
+    assignee_type: str
+    assignee_id: UUID
+    completed_by: Optional[UUID] = None
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+class ApprovalActionRequest(BaseSchema):
+    """审批操作请求"""
+    comment: Optional[str] = None
+
+
+class ApprovalTransferRequest(BaseSchema):
+    """转办请求"""
+    new_assignee_id: UUID
+    comment: Optional[str] = None
+
+
+class ApprovalActionResponse(BaseSchema):
+    """审批操作响应"""
+    success: bool
+    message: str
+    task_id: UUID
+    status: str
+    completed_at: datetime

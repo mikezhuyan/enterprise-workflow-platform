@@ -29,6 +29,7 @@ class NodeType(str, Enum):
     LOOP = "loop"
     DELAY = "delay"
     SUBFLOW = "subflow"
+    APPROVAL = "approval"
     
     # AI组件
     LLM = "llm"
@@ -97,6 +98,7 @@ class WorkflowNodeExecutor:
         self.handlers[NodeType.MCP] = self._handle_mcp
         self.handlers[NodeType.AGENT] = self._handle_agent
         self.handlers[NodeType.SCRIPT] = self._handle_script
+        self.handlers[NodeType.APPROVAL] = self._handle_approval
     
     async def execute(self, node: Dict[str, Any], context: ExecutionContext) -> NodeExecutionResult:
         """执行节点"""
@@ -449,6 +451,68 @@ class WorkflowNodeExecutor:
         except Exception as e:
             logs.append(f"脚本执行失败: {str(e)}")
             raise Exception(f"脚本执行错误: {str(e)}")
+    
+    async def _handle_approval(self, node_data: Dict, input_data: Dict, context: ExecutionContext, logs: List[str]) -> Any:
+        """处理审批节点
+        
+        审批节点会暂停工作流执行，等待审批结果。
+        支持超时自动处理和转办功能。
+        """
+        from datetime import datetime, timedelta
+        
+        node_id = context.execution_path[-1] if context.execution_path else "unknown"
+        node_name = node_data.get("label", node_data.get("name", "审批节点"))
+        assignee_type = node_data.get("assignee_type", "user")  # user, role, department
+        assignee_id = node_data.get("assignee_id", "")
+        timeout_seconds = node_data.get("timeout", 86400)  # 默认24小时
+        auto_action = node_data.get("auto_action", "reject")  # 超时自动操作: approve, reject
+        
+        logs.append(f"创建审批任务: {node_name}")
+        logs.append(f"审批对象类型: {assignee_type}, ID: {assignee_id}")
+        logs.append(f"超时时间: {timeout_seconds}秒, 超时自动操作: {auto_action}")
+        
+        # 创建审批任务数据，保存到上下文
+        approval_task = {
+            "id": str(uuid.uuid4()),
+            "execution_id": context.execution_id,
+            "node_id": node_id,
+            "node_name": node_name,
+            "status": "pending",
+            "assignee_type": assignee_type,
+            "assignee_id": assignee_id,
+            "input_data": input_data,
+            "timeout_at": (datetime.utcnow() + timedelta(seconds=timeout_seconds)).isoformat(),
+            "auto_action": auto_action,
+            "created_at": datetime.utcnow().isoformat(),
+            "comment": None,
+            "completed_by": None,
+            "completed_at": None
+        }
+        
+        # 将审批任务信息保存到上下文变量中，便于外部服务查询和处理
+        context.set_variable(f"_approval_task_{node_id}", approval_task)
+        context.set_variable(f"_approval_pending", {
+            "task_id": approval_task["id"],
+            "node_id": node_id,
+            "node_name": node_name,
+            "status": "pending"
+        })
+        
+        logs.append(f"审批任务已创建，等待审批: {approval_task['id']}")
+        
+        # 返回审批任务信息
+        # 注意：实际的等待逻辑需要在工作流引擎层面处理
+        # 这里返回 pending 状态，由外部服务轮询或回调更新
+        return {
+            "approval_task_id": approval_task["id"],
+            "status": "pending",
+            "node_id": node_id,
+            "node_name": node_name,
+            "assignee_type": assignee_type,
+            "assignee_id": assignee_id,
+            "timeout_at": approval_task["timeout_at"],
+            "message": "审批任务已创建，等待审批结果"
+        }
 
 
 class WorkflowEngine:

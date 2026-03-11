@@ -115,6 +115,7 @@ class WorkflowExecution(Base):
     # 关联
     workflow = relationship("Workflow", back_populates="executions")
     node_executions = relationship("NodeExecution", back_populates="execution")
+    approval_tasks = relationship("ApprovalTask", back_populates="execution")
 
 
 class NodeExecution(Base):
@@ -226,3 +227,126 @@ class WorkflowSchedule(Base):
     # 时间戳
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ApprovalTask(Base):
+    """审批任务表"""
+    __tablename__ = "approval_tasks"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    execution_id = Column(UUID(as_uuid=True), ForeignKey("workflow_executions.id"), nullable=False)
+    node_id = Column(String(100), nullable=False)  # 工作流定义中的节点ID
+    node_name = Column(String(100))  # 节点名称
+    
+    # 审批状态: pending, approved, rejected, transferred
+    status = Column(String(20), default="pending")
+    
+    # 指派人信息
+    assignee_type = Column(String(20), default="user")  # user, role, department
+    assignee_id = Column(UUID(as_uuid=True), nullable=False)  # 指派人/角色/部门ID
+    
+    # 审批意见
+    comment = Column(Text)
+    
+    # 转办信息
+    transferred_from = Column(UUID(as_uuid=True), ForeignKey("users.id"))  # 原指派人
+    transferred_at = Column(DateTime)
+    
+    # 完成信息
+    completed_at = Column(DateTime)
+    completed_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))  # 完成人
+    
+    # 超时配置
+    timeout_seconds = Column(Integer, default=86400)  # 超时时间(秒)
+    auto_action = Column(String(20), default="reject")  # 超时自动操作
+    timeout_at = Column(DateTime)  # 超时时间点
+    
+    # 输入数据 (审批时查看)
+    input_data = Column(JSON, default=dict)
+    
+    # 输出数据 (审批结果)
+    output_data = Column(JSON, default=dict)
+    
+    # 时间戳
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # 关联
+    execution = relationship("WorkflowExecution", back_populates="approval_tasks")
+    completed_user = relationship("User", foreign_keys=[completed_by])
+    transferred_user = relationship("User", foreign_keys=[transferred_from])
+
+
+class Webhook(Base):
+    """Webhook触发器"""
+    __tablename__ = "webhooks"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workflow_id = Column(UUID(as_uuid=True), ForeignKey("workflows.id"), nullable=False)
+    
+    # Webhook唯一标识 (用于URL)
+    uuid = Column(UUID(as_uuid=True), unique=True, nullable=False, default=uuid.uuid4, index=True)
+    
+    # 基本信息
+    name = Column(String(100), nullable=False)
+    description = Column(String(500))
+    
+    # 安全设置
+    secret = Column(String(255))  # 签名密钥
+    require_signature = Column(Boolean, default=False)  # 是否要求签名验证
+    
+    # 状态
+    is_active = Column(Boolean, default=True)
+    
+    # 请求限制
+    rate_limit = Column(Integer, default=0)  # 每分钟请求限制，0表示不限制
+    
+    # 统计
+    call_count = Column(Integer, default=0)
+    last_called_at = Column(DateTime)
+    
+    # 创建者
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    
+    # 时间戳
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # 关联
+    workflow = relationship("Workflow")
+    creator = relationship("User")
+
+
+class WebhookLog(Base):
+    """Webhook调用日志"""
+    __tablename__ = "webhook_logs"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    webhook_id = Column(UUID(as_uuid=True), ForeignKey("webhooks.id"), nullable=False)
+    
+    # 请求信息
+    request_method = Column(String(10))
+    request_headers = Column(JSON)
+    request_body = Column(Text)
+    request_ip = Column(String(50))
+    
+    # 响应信息
+    response_status = Column(Integer)
+    response_body = Column(Text)
+    
+    # 签名验证
+    signature_valid = Column(Boolean)
+    signature_provided = Column(String(255))
+    
+    # 执行结果
+    execution_id = Column(UUID(as_uuid=True), ForeignKey("workflow_executions.id"))
+    error_message = Column(Text)
+    
+    # 耗时 (毫秒)
+    duration_ms = Column(Integer)
+    
+    # 时间戳
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # 关联
+    webhook = relationship("Webhook")
